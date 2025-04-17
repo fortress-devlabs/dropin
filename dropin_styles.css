@@ -1,0 +1,306 @@
+/* dropin_styles.css */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+
+:root {
+    /* Consistent DropApps Theme Variables */
+    --primary-color: #007AFF;
+    --primary-hover: #0056b3;
+    --secondary-color: #6c757d;
+    --text-color: #333;
+    --text-light: #555;
+    --background-light: #f8f9fa;
+    --background-white: #ffffff;
+    --border-color: #dee2e6;
+    --border-radius: 8px;
+    --control-bg: rgba(40, 40, 40, 0.85); /* Dark semi-transparent for controls */
+    --control-icon: #f1f1f1;
+    --control-active: var(--primary-color);
+    --control-inactive: #dc3545; /* Red for inactive/muted */
+    --video-bg: #2c2c2c; /* Dark background for video containers */
+}
+
+/* --- General Reset & Body --- */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    overflow: hidden; /* Prevent body scrollbars */
+}
+
+body {
+    font-family: 'Poppins', sans-serif;
+    background-color: var(--background-light);
+    color: var(--text-color);
+    display: flex;
+    flex-direction: column;
+    line-height: 1.6;
+}
+
+.dropin-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* --- Header --- */
+.dropin-header {
+    background-color: var(--background-white);
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+    z-index: 10;
+    position: relative;
+}
+
+.dropin-header .logo {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+/* Optional: Style for Room ID display if added later */
+.room-id {
+    font-size: 0.85rem;
+    color: var(--secondary-color);
+}
+
+/* --- Main Meeting Area --- */
+.meeting-area {
+    flex-grow: 1;
+    width: 100%;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    background-color: var(--video-bg); /* Darker background for the whole area */
+    overflow: hidden;
+    position: relative; /* For positioning overlays */
+}
+
+/* --- Video Grid Layout --- */
+#video-grid {
+    display: grid;
+    width: 100%;
+    height: 100%;
+    padding: 0.5rem; /* Small padding around the grid */
+    gap: 0.5rem; /* Gap between video tiles */
+    align-content: center; /* Center grid items vertically if space allows */
+    justify-content: center; /* Center grid items horizontally */
+    transition: grid-template-columns 0.3s ease, grid-template-rows 0.3s ease;
+}
+
+/* Default/Single Participant */
+#video-grid.grid-1 {
+    grid-template-columns: minmax(0, 1fr); /* Single column */
+    grid-template-rows: minmax(0, 1fr);    /* Single row */
+}
+
+/* Two Participants */
+#video-grid.grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+}
+
+/* Three or Four Participants (2x2) */
+#video-grid.grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+/* Five or Six Participants (3x2) */
+#video-grid.grid-6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+/* Example for > 6 (could adjust based on needs) */
+#video-grid.grid-many {
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); /* Adjust min size */
+     grid-auto-rows: minmax(150px, auto); /* Ensure rows have minimum height */
+}
+
+
+/* --- Video Container & Video Element --- */
+.video-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: var(--video-bg); /* Dark bg if video is off/loading */
+    border-radius: var(--border-radius); /* Rounded corners for tiles */
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    display: flex; /* To center content like placeholders */
+    align-items: center;
+    justify-content: center;
+}
+
+/* Placeholder for when video is off */
+.video-container.video-off::before {
+    content: '\f007'; /* Font Awesome user icon */
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    font-size: 3rem;
+    color: rgba(255, 255, 255, 0.2);
+}
+
+
+.video-container video {
+    display: block; /* Remove extra space below video */
+    width: 100%;
+    height: 100%;
+    object-fit: cover; /* Fill container, might crop */
+    background-color: var(--video-bg); /* Ensure bg matches container */
+}
+
+#local-video {
+    transform: scaleX(-1); /* Mirror local video */
+}
+
+/* --- Participant Label (Optional) --- */
+.participant-label {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    background-color: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    padding: 0.2em 0.6em;
+    font-size: 0.75rem;
+    border-radius: 4px;
+    z-index: 2;
+}
+
+/* --- Initial Overlay & States --- */
+.initial-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6); /* Semi-transparent overlay */
+    display: flex;
+    flex-direction: column; /* Stack elements inside */
+    align-items: center;
+    justify-content: center;
+    z-index: 5; /* Above video grid, below header/controls */
+    color: #eee;
+    text-align: center;
+    padding: 1rem;
+}
+
+.loading-indicator,
+.ended-message { /* Style these indicators */
+    color: #ccc;
+    font-size: 1.1rem;
+    font-weight: 500;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 1rem 1.5rem;
+    border-radius: var(--border-radius);
+}
+
+.permission-prompt p {
+    margin-bottom: 1rem;
+    font-size: 1.05rem;
+}
+.permission-prompt button { /* Style the grant button */
+    padding: 0.7rem 1.5rem;
+    border-radius: var(--border-radius);
+    font-size: 0.9rem;
+    font-weight: 600;
+    border: none;
+    background-color: var(--primary-color);
+    color: var(--background-white);
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    margin-bottom: 1rem;
+}
+.permission-prompt button:hover {
+    background-color: var(--primary-hover);
+}
+.permission-prompt .error-message {
+    color: #ff8a8a; /* Lighter red for dark background */
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+}
+
+/* --- Control Bar --- */
+.control-bar {
+    background-color: var(--control-bg);
+    backdrop-filter: blur(5px); /* Optional blur effect */
+    padding: 0.75rem 1rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1.5rem; /* Spacing between buttons */
+    flex-shrink: 0;
+    position: relative; /* Needed for z-index if not fixed */
+    z-index: 10;
+}
+
+.control-button {
+    background-color: rgba(255, 255, 255, 0.15); /* Slightly visible button bg */
+    color: var(--control-icon);
+    border: none;
+    border-radius: 50%; /* Circular buttons */
+    width: 50px;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem; /* Icon size */
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease, transform 0.1s ease;
+}
+
+.control-button:hover {
+    background-color: rgba(255, 255, 255, 0.25);
+}
+.control-button:active {
+    transform: scale(0.95);
+}
+
+.control-button.inactive { /* Red for mic/cam off */
+    background-color: var(--control-inactive);
+    color: white;
+}
+.control-button.inactive:hover {
+    background-color: #c82333; /* Darker red on hover */
+}
+
+/* Make Leave button always red */
+.control-button.leave {
+    background-color: var(--control-inactive);
+    color: white;
+}
+.control-button.leave:hover {
+    background-color: #c82333;
+}
+
+.control-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+
+/* --- Responsive Adjustments --- */
+@media (max-width: 768px) {
+     /* No major changes needed for grid usually, check padding/gap */
+    #video-grid { padding: 0.3rem; gap: 0.3rem; }
+    .control-bar { gap: 1rem; }
+    .control-button { width: 45px; height: 45px; font-size: 1.1rem; }
+}
+
+@media (max-width: 480px) {
+    .dropin-header { padding: 0.5rem 1rem; }
+    .dropin-header .logo { font-size: 1.2rem; }
+    .loading-indicator, .ended-message { font-size: 1rem; padding: 0.8rem 1.2rem; }
+    .permission-prompt p { font-size: 1rem; }
+    .permission-prompt button { padding: 0.6rem 1.2rem; font-size: 0.85rem; }
+    .control-bar { padding: 0.5rem; gap: 0.75rem; }
+    .control-button { width: 40px; height: 40px; font-size: 1rem; }
+}
