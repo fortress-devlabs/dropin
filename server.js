@@ -19,7 +19,6 @@ io.on('connection', (socket) => {
 
     socket.on('join', (roomId) => {
         socket.join(roomId);
-        // --- FIXED BACKTICKS ---
         console.log(`User ${socket.id} joined room ${roomId}`);
 
         // Fetch existing users IN THE ROOM *before* adding the new user
@@ -34,37 +33,44 @@ io.on('connection', (socket) => {
     });
 
     socket.on('offer', (data) => {
-        // Send the offer *only* to the target user
-        // console.log(`Relaying offer from ${socket.id} to ${data.targetId}`); // Optional log
         socket.to(data.targetId).emit('offer', {
             senderId: socket.id,
-            offer: data.offer // Use data.offer as received from client
+            offer: data.offer
         });
     });
 
     socket.on('answer', (data) => {
-        // Send the answer *only* to the target user (who sent the offer)
-        // console.log(`Relaying answer from ${socket.id} to ${data.targetId}`); // Optional log
         socket.to(data.targetId).emit('answer', {
             senderId: socket.id,
-            answer: data.answer // Use data.answer as received from client
+            answer: data.answer
         });
     });
 
-    socket.on('ice_candidate', (data) => { // Renamed event to match client
-        // Send the ICE candidate *only* to the target user
-        // console.log(`Relaying ICE candidate from ${socket.id} to ${data.targetId}`); // Optional log
-        socket.to(data.targetId).emit('ice_candidate', { // Renamed event to match client
+    socket.on('ice_candidate', (data) => {
+        socket.to(data.targetId).emit('ice_candidate', {
             senderId: socket.id,
             candidate: data.candidate
         });
     });
 
-    socket.on('disconnecting', () => { // Use 'disconnecting' to access rooms before leaving
-        console.log(`User disconnecting: ${socket.id}`);
-        // Notify others in the rooms the user was in
+    // --- 💬 ADD CHAT HANDLER ---
+    socket.on('chat_message', (data) => {
+        console.log(`Chat message from ${socket.id}:`, data);
+
         socket.rooms.forEach(roomId => {
-            if (roomId !== socket.id) { // Don't broadcast to the user's own default room
+            if (roomId !== socket.id) { // Skip personal room
+                io.to(roomId).emit('chat_message', {
+                    senderId: socket.id,
+                    message: data.message
+                });
+            }
+        });
+    });
+
+    socket.on('disconnecting', () => {
+        console.log(`User disconnecting: ${socket.id}`);
+        socket.rooms.forEach(roomId => {
+            if (roomId !== socket.id) {
                 socket.to(roomId).emit('user_left', socket.id);
                 console.log(`Notified room ${roomId} that user ${socket.id} left`);
             }
@@ -73,7 +79,7 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log(`User disconnected event: ${socket.id}`);
-        // No need to broadcast here, 'disconnecting' handles it better
+        // No extra logic needed here
     });
 });
 
