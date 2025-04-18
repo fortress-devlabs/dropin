@@ -75,8 +75,13 @@ io.on('connection', (socket) => {
     });
 });
 
+// --- Handle Short Links (Redirects)
+app.get('/c/:roomId', (req, res) => {
+    const roomId = req.params.roomId;
+    res.redirect(`/#${roomId}`);
+});
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    // --- This one was already correct ---
     console.log(`Signaling server running on port ${PORT}`);
 });
