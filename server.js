@@ -80,7 +80,12 @@ io.on('connection', (socket) => {
 // --- Handle Short Links (Redirects)
 app.get('/c/:roomId', (req, res) => {
     const roomId = req.params.roomId;
-    res.redirect(`/#${roomId}`);
+    res.redirect(`/v1.html#${roomId}`);
+});
+
+// --- Root Redirect to v1.html
+app.get('/', (req, res) => {
+    res.redirect('/v1.html');
 });
 
 const PORT = process.env.PORT || 3000;
