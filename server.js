@@ -14,148 +14,85 @@ const io = new Server(server, {
 
 app.use(express.static('public'));
 
-// Track sessions: sessionId => [ { socketId, username } ]
-const sessions = new Map();
-
+// --- MAIN CONNECTION HANDLER ---
 io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+    console.log('User connected:', socket.id);
 
-    // --- JOIN SESSION (DropIt) ---
-    socket.on('join_session', (data) => {
-        const { sessionId, username } = data;
-        console.log(`User ${username} (${socket.id}) is joining session ${sessionId}`);
+    // --- Join a Chat Room ---
+    socket.on('join_chat_room', (data) => {
+        const { room, user } = data;
+        socket.join(room);
+        socket.roomId = room;
+        socket.username = user;
+        console.log(`User ${user} (${socket.id}) joined room ${room}`);
 
-        if (!sessions.has(sessionId)) {
-            sessions.set(sessionId, []);
-        }
-        sessions.get(sessionId).push({ socketId: socket.id, username });
+        // Notify existing users someone joined
+        socket.to(room).emit('user_joined_chat', { user, socketId: socket.id });
 
-        // Save sessionId on socket object to know later
-        socket.sessionId = sessionId;
-        socket.username = username;
-
-        const usersInSession = sessions.get(sessionId);
-
-        if (usersInSession.length === 2) {
-            // Notify both users about each other
-            const [user1, user2] = usersInSession;
-
-            io.to(user1.socketId).emit('partner_joined', {
-                username: user2.username,
-                socketId: user2.socketId
-            });
-
-            io.to(user2.socketId).emit('partner_joined', {
-                username: user1.username,
-                socketId: user1.socketId
-            });
-
-            console.log(`Session ${sessionId}: Paired ${user1.username} <-> ${user2.username}`);
-        }
+        // Send the new user the list of already connected users
+        const clientsInRoom = Array.from(io.sockets.adapter.rooms.get(room) || []);
+        const users = {};
+        clientsInRoom.forEach(id => {
+            const clientSocket = io.sockets.sockets.get(id);
+            if (clientSocket) {
+                users[clientSocket.id] = clientSocket.username || "Unknown";
+            }
+        });
+        socket.emit('session_users', users);
     });
 
-    // --- RELAY PRIVATE MESSAGE ---
-    socket.on('private_message', (data) => {
-        const { recipientSocketId, message } = data;
-        console.log(`Private message from ${socket.id} to ${recipientSocketId}:`, message);
-
-        io.to(recipientSocketId).emit('private_message', {
-            senderUsername: socket.username,
-            senderSocketId: socket.id,
+    // --- Handle Chat Messages ---
+    socket.on('chat_message', (data) => {
+        const { username, message, session } = data;
+        console.log(`Message from ${username} (${socket.id}) in session ${session}: ${message}`);
+        socket.to(session).emit('chat_message', {
+            username,
             message
         });
     });
 
-    // --- Handle Disconnects ---
+    // --- Handle User Disconnect ---
     socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
-
-        const sessionId = socket.sessionId;
-
-        if (sessionId && sessions.has(sessionId)) {
-            const users = sessions.get(sessionId).filter(user => user.socketId !== socket.id);
-
-            if (users.length === 0) {
-                sessions.delete(sessionId);
-            } else {
-                sessions.set(sessionId, users);
-                const remainingUser = users[0];
-
-                io.to(remainingUser.socketId).emit('partner_left');
-                console.log(`Notified ${remainingUser.username} that their partner left.`);
-            }
+        if (socket.roomId && socket.username) {
+            console.log(`User ${socket.username} (${socket.id}) disconnected from ${socket.roomId}`);
+            socket.to(socket.roomId).emit('user_left_chat', { user: socket.username, socketId: socket.id });
         }
     });
 
-    // --- Existing DropIn Room Logic (for StreamDrop etc) ---
+    // --- (Old StreamDrop compatibility) ---
     socket.on('join', (roomId) => {
         socket.join(roomId);
         console.log(`User ${socket.id} joined room ${roomId}`);
-
         const room = io.sockets.adapter.rooms.get(roomId);
         const otherUsers = room ? Array.from(room).filter(id => id !== socket.id) : [];
-
         socket.emit('existing_users', otherUsers);
         socket.to(roomId).emit('user_joined', socket.id);
     });
 
     socket.on('offer', (data) => {
-        socket.to(data.targetId).emit('offer', {
-            senderId: socket.id,
-            offer: data.offer
-        });
+        socket.to(data.targetId).emit('offer', { senderId: socket.id, offer: data.offer });
     });
 
     socket.on('answer', (data) => {
-        socket.to(data.targetId).emit('answer', {
-            senderId: socket.id,
-            answer: data.answer
-        });
+        socket.to(data.targetId).emit('answer', { senderId: socket.id, answer: data.answer });
     });
 
     socket.on('ice_candidate', (data) => {
-        socket.to(data.targetId).emit('ice_candidate', {
-            senderId: socket.id,
-            candidate: data.candidate
-        });
-    });
-
-    socket.on('chat_message', (data) => {
-        console.log(`Chat message from ${socket.id}:`, data);
-
-        socket.rooms.forEach(roomId => {
-            if (roomId !== socket.id) {
-                io.to(roomId).emit('chat_message', {
-                    senderId: socket.id,
-                    message: data.message
-                });
-            }
-        });
-    });
-
-    socket.on('disconnecting', () => {
-        console.log(`User disconnecting: ${socket.id}`);
-        socket.rooms.forEach(roomId => {
-            if (roomId !== socket.id) {
-                socket.to(roomId).emit('user_left', socket.id);
-                console.log(`Notified room ${roomId} that user ${socket.id} left`);
-            }
-        });
+        socket.to(data.targetId).emit('ice_candidate', { senderId: socket.id, candidate: data.candidate });
     });
 });
 
-// --- Handle Short Links (Redirects)
+// --- Short Link Redirects ---
 app.get('/c/:roomId', (req, res) => {
-    const roomId = req.params.roomId;
-    res.redirect(`/v1.html#${roomId}`);
+    res.redirect(`/v1.html#${req.params.roomId}`);
 });
 
-// --- Root Redirect to v1.html
+// --- Root Redirect ---
 app.get('/', (req, res) => {
     res.redirect('/v1.html');
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Signaling server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
