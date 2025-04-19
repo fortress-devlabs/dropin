@@ -14,21 +14,88 @@ const io = new Server(server, {
 
 app.use(express.static('public'));
 
+// Track sessions: sessionId => [ { socketId, username } ]
+const sessions = new Map();
+
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
+    // --- JOIN SESSION (DropIt) ---
+    socket.on('join_session', (data) => {
+        const { sessionId, username } = data;
+        console.log(`User ${username} (${socket.id}) is joining session ${sessionId}`);
+
+        if (!sessions.has(sessionId)) {
+            sessions.set(sessionId, []);
+        }
+        sessions.get(sessionId).push({ socketId: socket.id, username });
+
+        // Save sessionId on socket object to know later
+        socket.sessionId = sessionId;
+        socket.username = username;
+
+        const usersInSession = sessions.get(sessionId);
+
+        if (usersInSession.length === 2) {
+            // Notify both users about each other
+            const [user1, user2] = usersInSession;
+
+            io.to(user1.socketId).emit('partner_joined', {
+                username: user2.username,
+                socketId: user2.socketId
+            });
+
+            io.to(user2.socketId).emit('partner_joined', {
+                username: user1.username,
+                socketId: user1.socketId
+            });
+
+            console.log(`Session ${sessionId}: Paired ${user1.username} <-> ${user2.username}`);
+        }
+    });
+
+    // --- RELAY PRIVATE MESSAGE ---
+    socket.on('private_message', (data) => {
+        const { recipientSocketId, message } = data;
+        console.log(`Private message from ${socket.id} to ${recipientSocketId}:`, message);
+
+        io.to(recipientSocketId).emit('private_message', {
+            senderUsername: socket.username,
+            senderSocketId: socket.id,
+            message
+        });
+    });
+
+    // --- Handle Disconnects ---
+    socket.on('disconnect', () => {
+        console.log('User disconnected:', socket.id);
+
+        const sessionId = socket.sessionId;
+
+        if (sessionId && sessions.has(sessionId)) {
+            const users = sessions.get(sessionId).filter(user => user.socketId !== socket.id);
+
+            if (users.length === 0) {
+                sessions.delete(sessionId);
+            } else {
+                sessions.set(sessionId, users);
+                const remainingUser = users[0];
+
+                io.to(remainingUser.socketId).emit('partner_left');
+                console.log(`Notified ${remainingUser.username} that their partner left.`);
+            }
+        }
+    });
+
+    // --- Existing DropIn Room Logic (for StreamDrop etc) ---
     socket.on('join', (roomId) => {
         socket.join(roomId);
         console.log(`User ${socket.id} joined room ${roomId}`);
 
-        // Fetch existing users IN THE ROOM *before* adding the new user
         const room = io.sockets.adapter.rooms.get(roomId);
         const otherUsers = room ? Array.from(room).filter(id => id !== socket.id) : [];
 
-        // Send the list of existing users to the newly joined user
         socket.emit('existing_users', otherUsers);
-
-        // Notify existing users about the new user
         socket.to(roomId).emit('user_joined', socket.id);
     });
 
@@ -53,12 +120,11 @@ io.on('connection', (socket) => {
         });
     });
 
-    // --- 💬 ADD CHAT HANDLER ---
     socket.on('chat_message', (data) => {
         console.log(`Chat message from ${socket.id}:`, data);
 
         socket.rooms.forEach(roomId => {
-            if (roomId !== socket.id) { // Skip personal room
+            if (roomId !== socket.id) {
                 io.to(roomId).emit('chat_message', {
                     senderId: socket.id,
                     message: data.message
@@ -75,11 +141,6 @@ io.on('connection', (socket) => {
                 console.log(`Notified room ${roomId} that user ${socket.id} left`);
             }
         });
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`User disconnected event: ${socket.id}`);
-        // No extra logic needed here
     });
 });
 
