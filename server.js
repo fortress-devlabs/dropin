@@ -1,4 +1,4 @@
-// --- DropIn Secure Messaging + Theatre Server ---
+// --- server.js ---
 
 const express = require('express');
 const http = require('http');
@@ -14,32 +14,29 @@ const io = new Server(server, {
 
 app.use(express.static('public'));
 
-// --- Main Connection Handler ---
-const theatreRooms = {}; // Theatre state tracking
-
+// --- MAIN CONNECTION HANDLER ---
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
     // Store username and sessionId from connection query
-    const { username, sessionId, dropID } = socket.handshake.query;
+    const { username, sessionId, dropID, isHost } = socket.handshake.query;
     socket.username = username;
     socket.sessionId = sessionId;
     socket.dropID = dropID;
+    socket.isHost = isHost === "true" ? true : false; // socket.io passes everything as strings
 
-    console.log(`Handshake Info -> Username: ${username}, Session: ${sessionId}`);
+    console.log(`Handshake Info -> Username: ${username}, Session: ${sessionId}, DropID: ${dropID}, Host: ${socket.isHost}`);
 
-    // --- DropIn Chat Room Functions ---
+    // --- DROPIN CHAT HANDLERS (ORIGINAL CODE) ---
     socket.on('join_chat_room', (data) => {
         const { room, user } = data;
         socket.join(room);
         socket.roomId = room;
         socket.username = user;
-        console.log(`User ${user} (${socket.id}) joined room ${room}`);
+        console.log(`User ${user} (${socket.id}) joined chat room ${room}`);
 
-        // Notify existing users
         socket.to(room).emit('user_joined_chat', { user, socketId: socket.id });
 
-        // Send list of already connected users
         const clientsInRoom = Array.from(io.sockets.adapter.rooms.get(room) || []);
         const users = {};
         clientsInRoom.forEach(id => {
@@ -53,7 +50,7 @@ io.on('connection', (socket) => {
 
     socket.on('chat_message', (data) => {
         const { username, message, session } = data;
-        console.log(`Message from ${username} in session ${session}: ${message}`);
+        console.log(`Message from ${username} (${socket.id}) in session ${session}: ${message}`);
         socket.to(session).emit('chat_message', {
             username,
             message,
@@ -77,125 +74,155 @@ io.on('connection', (socket) => {
         });
     });
 
-    socket.on('disconnect', () => {
-        if (socket.sessionId && socket.username) {
-            console.log(`User ${socket.username} disconnected from session ${socket.sessionId}`);
-            socket.to(socket.sessionId).emit('user_left_chat', {
-                user: socket.username,
-                socketId: socket.id
-            });
-        }
+    // --- DROPIN THEATRE HANDLERS (NEW CODE) ---
 
-        // Handle Theatre Room disconnects
-        if (socket.theatreRoomId && theatreRooms[socket.theatreRoomId]) {
-            const room = theatreRooms[socket.theatreRoomId];
-            room.viewers = room.viewers.filter(id => id !== socket.dropID);
-            io.to(socket.theatreRoomId).emit('viewer_count_update', {
-                count: room.viewers.length
-            });
-        }
-    });
+    // Room Data Tracking
+    const theatreRooms = {}; // { roomId: { hostSocketId, videoUrl, viewers: Set() } }
 
-    // --- Short Link Redirects ---
-    app.get('/c/:roomId', (req, res) => {
-        res.redirect(`/v1.html#${req.params.roomId}`);
-    });
-
-    // --- Root Redirect ---
-    app.get('/', (req, res) => {
-        res.redirect('/v1.html');
-    });
-
-    // --- DropIn Theatre Functions ---
     socket.on('create_theatre_room', (data) => {
-        const { roomId, videoUrl, hostUsername, scheduledStart, allowReplay } = data;
-        theatreRooms[roomId] = {
-            host: hostUsername,
-            videoUrl,
-            scheduledStart: scheduledStart || null,
-            allowReplay: allowReplay || false,
-            videoState: {
-                isPlaying: false,
-                currentTime: 0,
-                lastUpdate: Date.now()
-            },
-            viewers: [],
-            uniqueViewers: new Set()
-        };
+        const { roomId, videoUrl, hostUsername } = data;
+        if (!roomId || !videoUrl) {
+            console.error("Invalid room creation attempt.");
+            return;
+        }
+
+        console.log(`Host ${hostUsername} (${socket.id}) creating theatre room: ${roomId}`);
+
         socket.join(roomId);
-        socket.theatreRoomId = roomId;
-        console.log(`Theatre Room Created: ${roomId} by ${hostUsername}`);
-        io.to(roomId).emit('theatre_room_created', { videoUrl, hostUsername, scheduledStart, allowReplay });
+        socket.roomId = roomId;
+
+        theatreRooms[roomId] = {
+            hostSocketId: socket.id,
+            videoUrl: videoUrl,
+            viewers: new Set() // Add viewers as they join
+        };
+
+        socket.emit('theatre_room_created', { roomId, videoUrl });
     });
 
     socket.on('join_theatre_room', (data) => {
-        const { roomId } = data;
-        socket.join(roomId);
-        socket.theatreRoomId = roomId;
-
-        if (theatreRooms[roomId]) {
-            const room = theatreRooms[roomId];
-            if (!room.viewers.includes(socket.dropID)) {
-                room.viewers.push(socket.dropID);
-            }
-            room.uniqueViewers.add(socket.dropID);
-
-            socket.emit('sync_video_state', { videoState: room.videoState });
-            if (room.scheduledStart) {
-                socket.emit('scheduled_start_info', { scheduledStart: room.scheduledStart });
-            }
-
-            io.to(roomId).emit('viewer_count_update', { count: room.viewers.length });
+        const { roomId, username } = data;
+        if (!roomId || !theatreRooms[roomId]) {
+            console.error(`Viewer ${username} tried to join nonexistent theatre room: ${roomId}`);
+            return;
         }
+
+        console.log(`Viewer ${username} (${socket.id}) joining theatre room: ${roomId}`);
+        socket.join(roomId);
+        socket.roomId = roomId;
+
+        // Track viewer separately (host not included here)
+        theatreRooms[roomId].viewers.add(socket.id);
+
+        // Send initial sync data to new viewer
+        socket.emit('theatre_room_created', { roomId, videoUrl: theatreRooms[roomId].videoUrl });
+
+        updateTheatreViewerCount(roomId);
     });
 
+    // Play/Pause/Seek (HOST ONLY)
     socket.on('play_video', (data) => {
         const { roomId, currentTime } = data;
-        if (theatreRooms[roomId]) {
-            theatreRooms[roomId].videoState = { isPlaying: true, currentTime, lastUpdate: Date.now() };
-            io.to(roomId).emit('play_video', { currentTime });
+        if (validateHost(socket, roomId)) {
+            console.log(`Host (${socket.id}) play video at ${currentTime}`);
+            socket.to(roomId).emit('play_video', { currentTime });
         }
     });
 
     socket.on('pause_video', (data) => {
         const { roomId, currentTime } = data;
-        if (theatreRooms[roomId]) {
-            theatreRooms[roomId].videoState = { isPlaying: false, currentTime, lastUpdate: Date.now() };
-            io.to(roomId).emit('pause_video', { currentTime });
+        if (validateHost(socket, roomId)) {
+            console.log(`Host (${socket.id}) pause video at ${currentTime}`);
+            socket.to(roomId).emit('pause_video', { currentTime });
         }
     });
 
     socket.on('seek_video', (data) => {
         const { roomId, seekTime } = data;
-        if (theatreRooms[roomId]) {
-            theatreRooms[roomId].videoState.currentTime = seekTime;
-            theatreRooms[roomId].videoState.lastUpdate = Date.now();
-            io.to(roomId).emit('seek_video', { seekTime });
+        if (validateHost(socket, roomId)) {
+            console.log(`Host (${socket.id}) seek video to ${seekTime}`);
+            socket.to(roomId).emit('seek_video', { seekTime });
         }
     });
 
+    // Theatre Chat
     socket.on('send_theatre_comment', (data) => {
         const { roomId, username, commentText } = data;
-        io.to(roomId).emit('new_theatre_comment', { username, commentText });
-    });
-
-    socket.on('send_theatre_reaction', (data) => {
-        const { roomId, emoji } = data;
-        io.to(roomId).emit('new_theatre_reaction', { emoji });
-    });
-
-    socket.on('leave_theatre_room', (data) => {
-        const { roomId } = data;
-        socket.leave(roomId);
-        if (theatreRooms[roomId]) {
-            const room = theatreRooms[roomId];
-            room.viewers = room.viewers.filter(id => id !== socket.dropID);
-            io.to(roomId).emit('viewer_count_update', { count: room.viewers.length });
+        if (roomId && username && commentText) {
+            io.to(roomId).emit('new_theatre_comment', { username, commentText });
         }
     });
+
+    // Theatre Emoji Reaction
+    socket.on('send_theatre_reaction', (data) => {
+        const { roomId, emoji } = data;
+        if (roomId && emoji) {
+            io.to(roomId).emit('new_theatre_reaction', { emoji });
+        }
+    });
+
+    // --- Disconnection Handling ---
+    socket.on('disconnect', () => {
+        console.log(`User disconnected: ${socket.id}`);
+
+        if (socket.roomId) {
+            const roomId = socket.roomId;
+
+            // Theatre Room Viewer Count Update
+            if (theatreRooms[roomId]) {
+                theatreRooms[roomId].viewers.delete(socket.id);
+
+                if (socket.id === theatreRooms[roomId].hostSocketId) {
+                    console.log(`Host disconnected, closing theatre room: ${roomId}`);
+                    // Notify viewers room is closed? (optional)
+                    io.to(roomId).emit('theatre_room_closed');
+                    delete theatreRooms[roomId];
+                } else {
+                    updateTheatreViewerCount(roomId);
+                }
+            }
+
+            // DropIn Chat Leave Notification
+            if (socket.sessionId && socket.username) {
+                socket.to(socket.sessionId).emit('user_left_chat', {
+                    user: socket.username,
+                    socketId: socket.id
+                });
+            }
+        }
+    });
+
+    // --- Utility Functions ---
+    function validateHost(socket, roomId) {
+        if (!theatreRooms[roomId]) {
+            console.error("Theatre room does not exist.");
+            return false;
+        }
+        if (theatreRooms[roomId].hostSocketId !== socket.id) {
+            console.error("Only Host can control video.");
+            return false;
+        }
+        return true;
+    }
+
+    function updateTheatreViewerCount(roomId) {
+        if (!theatreRooms[roomId]) return;
+        const viewerCount = theatreRooms[roomId].viewers.size;
+        io.to(roomId).emit('viewer_count_update', { count: viewerCount });
+    }
 });
 
-// --- Start the Server ---
+// --- Short Link Redirects ---
+app.get('/c/:roomId', (req, res) => {
+    res.redirect(`/v1.html#${req.params.roomId}`);
+});
+
+// --- Root Redirect ---
+app.get('/', (req, res) => {
+    res.redirect('/v1.html');
+});
+
+// --- Server Start ---
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
