@@ -18,7 +18,14 @@ app.use(express.static('public'));
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
-    // --- Join a Chat Room ---
+    // Store username and sessionId from connection query
+    const { username, sessionId } = socket.handshake.query;
+    socket.username = username;
+    socket.sessionId = sessionId;
+
+    console.log(`Handshake Info -> Username: ${username}, Session: ${sessionId}`);
+
+    // --- Join a Chat Room (DropIt) ---
     socket.on('join_chat_room', (data) => {
         const { room, user } = data;
         socket.join(room);
@@ -47,38 +54,37 @@ io.on('connection', (socket) => {
         console.log(`Message from ${username} (${socket.id}) in session ${session}: ${message}`);
         socket.to(session).emit('chat_message', {
             username,
-            message
+            message,
+            senderSocketId: socket.id
         });
     });
 
-    // --- Handle User Disconnect ---
+    // --- Typing Indicators ---
+    socket.on('start_typing', (data) => {
+        const { session, username } = data;
+        socket.to(session).emit('user_started_typing', {
+            username,
+            socketId: socket.id
+        });
+    });
+
+    socket.on('stop_typing', (data) => {
+        const { session, username } = data;
+        socket.to(session).emit('user_stopped_typing', {
+            username,
+            socketId: socket.id
+        });
+    });
+
+    // --- Handle Disconnects ---
     socket.on('disconnect', () => {
-        if (socket.roomId && socket.username) {
-            console.log(`User ${socket.username} (${socket.id}) disconnected from ${socket.roomId}`);
-            socket.to(socket.roomId).emit('user_left_chat', { user: socket.username, socketId: socket.id });
+        if (socket.sessionId && socket.username) {
+            console.log(`User ${socket.username} (${socket.id}) disconnected from session ${socket.sessionId}`);
+            socket.to(socket.sessionId).emit('user_left_chat', {
+                user: socket.username,
+                socketId: socket.id
+            });
         }
-    });
-
-    // --- (Old StreamDrop compatibility) ---
-    socket.on('join', (roomId) => {
-        socket.join(roomId);
-        console.log(`User ${socket.id} joined room ${roomId}`);
-        const room = io.sockets.adapter.rooms.get(roomId);
-        const otherUsers = room ? Array.from(room).filter(id => id !== socket.id) : [];
-        socket.emit('existing_users', otherUsers);
-        socket.to(roomId).emit('user_joined', socket.id);
-    });
-
-    socket.on('offer', (data) => {
-        socket.to(data.targetId).emit('offer', { senderId: socket.id, offer: data.offer });
-    });
-
-    socket.on('answer', (data) => {
-        socket.to(data.targetId).emit('answer', { senderId: socket.id, answer: data.answer });
-    });
-
-    socket.on('ice_candidate', (data) => {
-        socket.to(data.targetId).emit('ice_candidate', { senderId: socket.id, candidate: data.candidate });
     });
 });
 
