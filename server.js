@@ -1,4 +1,4 @@
-// --- server.js (UPDATED for Binary Video Transfer) ---
+// --- server.js (UPDATED with Ping Timeout Increase) ---
 
 const express = require('express');
 const http = require('http');
@@ -10,13 +10,16 @@ const io = new Server(server, {
     cors: {
         origin: '*',
     },
-    // Increase maxHttpBufferSize for larger binary data (still useful)
+    // UPDATED: Added pingInterval and pingTimeout
+    pingInterval: 20000, // Send ping every 20 seconds
+    pingTimeout: 120000, // Wait up to 120 seconds (2 minutes) for pong
+    // Keep large buffer size
     maxHttpBufferSize: 1e8 // 100 MB
 });
 
 app.use(express.static('public'));
 
-// Express body limits (still good practice)
+// Express body limits
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
@@ -49,12 +52,15 @@ io.on('connection', (socket) => {
         const users = {};
         clientsInRoom.forEach(id => {
             const clientSocket = io.sockets.sockets.get(id);
-            // Ensure clientSocket exists before accessing properties
-            if (clientSocket) {
-                 users[clientSocket.id] = clientSocket.username || "Unknown";
+             // Ensure clientSocket exists before accessing properties
+             if (clientSocket) {
+                 // Include others, but not self initially
+                 if(clientSocket.id !== socket.id) {
+                    users[clientSocket.id] = clientSocket.username || "Unknown";
+                 }
              }
         });
-        // users[socket.id] = socket.username; // Client already knows its own info
+        // Send list of *other* users to the newly joined user
         socket.emit('session_users', users);
     });
 
@@ -92,16 +98,14 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🔥 **VIDEO DROP Handler (UPDATED for ArrayBuffer)** 🔥
+    // VIDEO DROP Handler (Receives ArrayBuffer)
     socket.on('video_drop', (data) => {
-        // Expecting { username, session, videoBuffer }
         const { username, session, videoBuffer } = data;
-        if (session && username && videoBuffer instanceof Buffer) { // Check if videoBuffer is received correctly (should be Buffer on server)
+        if (session && username && videoBuffer instanceof Buffer) {
             console.log(`Video Drop Buffer from ${username} (${socket.id}) in session ${session}, Size: ${videoBuffer.length} bytes`);
-            // Broadcast the video buffer to others in the session
             socket.to(session).emit('video_drop', {
                 username: username,
-                videoBuffer: videoBuffer, // Send the ArrayBuffer/Buffer
+                videoBuffer: videoBuffer,
                 senderSocketId: socket.id
             });
         } else {
