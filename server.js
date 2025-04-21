@@ -14,9 +14,7 @@ const io = new Server(server, {
 
 app.use(express.static('public'));
 
-// --- GLOBAL Room Data Tracking ---
-const theatreRooms = {}; // <- THIS IS NOW OUTSIDE connection handler (important!)
-
+// --- MAIN CONNECTION HANDLER ---
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
@@ -25,11 +23,11 @@ io.on('connection', (socket) => {
     socket.username = username;
     socket.sessionId = sessionId;
     socket.dropID = dropID;
-    socket.isHost = isHost === "true";
+    socket.isHost = isHost === "true" ? true : false; // socket.io passes everything as strings
 
     console.log(`Handshake Info -> Username: ${username}, Session: ${sessionId}, DropID: ${dropID}, Host: ${socket.isHost}`);
 
-    // --- DROPIN CHAT HANDLERS ---
+    // --- DROPIN CHAT HANDLERS (ORIGINAL CODE) ---
     socket.on('join_chat_room', (data) => {
         const { room, user } = data;
         socket.join(room);
@@ -62,15 +60,24 @@ io.on('connection', (socket) => {
 
     socket.on('start_typing', (data) => {
         const { session, username } = data;
-        socket.to(session).emit('user_started_typing', { username, socketId: socket.id });
+        socket.to(session).emit('user_started_typing', {
+            username,
+            socketId: socket.id
+        });
     });
 
     socket.on('stop_typing', (data) => {
         const { session, username } = data;
-        socket.to(session).emit('user_stopped_typing', { username, socketId: socket.id });
+        socket.to(session).emit('user_stopped_typing', {
+            username,
+            socketId: socket.id
+        });
     });
 
-    // --- DROPIN THEATRE HANDLERS ---
+    // --- DROPIN THEATRE HANDLERS (NEW CODE) ---
+
+    // Room Data Tracking
+    const theatreRooms = {}; // { roomId: { hostSocketId, videoUrl, viewers: Set() } }
 
     socket.on('create_theatre_room', (data) => {
         const { roomId, videoUrl, hostUsername } = data;
@@ -86,19 +93,17 @@ io.on('connection', (socket) => {
 
         theatreRooms[roomId] = {
             hostSocketId: socket.id,
-            hostUsername,
-            videoUrl,
-            viewers: new Set()
+            videoUrl: videoUrl,
+            viewers: new Set() // Add viewers as they join
         };
 
-        io.to(roomId).emit('theatre_room_created', { videoUrl }); // Broadcast to room
+        socket.emit('theatre_room_created', { roomId, videoUrl });
     });
 
     socket.on('join_theatre_room', (data) => {
         const { roomId, username } = data;
         if (!roomId || !theatreRooms[roomId]) {
             console.error(`Viewer ${username} tried to join nonexistent theatre room: ${roomId}`);
-            socket.emit('theatre_room_closed');
             return;
         }
 
@@ -106,19 +111,20 @@ io.on('connection', (socket) => {
         socket.join(roomId);
         socket.roomId = roomId;
 
+        // Track viewer separately (host not included here)
         theatreRooms[roomId].viewers.add(socket.id);
 
-        // Send initial theatre info directly to new viewer
-        socket.emit('theatre_room_created', {
-            videoUrl: theatreRooms[roomId].videoUrl
-        });
+        // Send initial sync data to new viewer
+        socket.emit('theatre_room_created', { roomId, videoUrl: theatreRooms[roomId].videoUrl });
 
         updateTheatreViewerCount(roomId);
     });
 
+    // Play/Pause/Seek (HOST ONLY)
     socket.on('play_video', (data) => {
         const { roomId, currentTime } = data;
         if (validateHost(socket, roomId)) {
+            console.log(`Host (${socket.id}) play video at ${currentTime}`);
             socket.to(roomId).emit('play_video', { currentTime });
         }
     });
@@ -126,6 +132,7 @@ io.on('connection', (socket) => {
     socket.on('pause_video', (data) => {
         const { roomId, currentTime } = data;
         if (validateHost(socket, roomId)) {
+            console.log(`Host (${socket.id}) pause video at ${currentTime}`);
             socket.to(roomId).emit('pause_video', { currentTime });
         }
     });
@@ -133,10 +140,12 @@ io.on('connection', (socket) => {
     socket.on('seek_video', (data) => {
         const { roomId, seekTime } = data;
         if (validateHost(socket, roomId)) {
+            console.log(`Host (${socket.id}) seek video to ${seekTime}`);
             socket.to(roomId).emit('seek_video', { seekTime });
         }
     });
 
+    // Theatre Chat
     socket.on('send_theatre_comment', (data) => {
         const { roomId, username, commentText } = data;
         if (roomId && username && commentText) {
@@ -144,6 +153,7 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Theatre Emoji Reaction
     socket.on('send_theatre_reaction', (data) => {
         const { roomId, emoji } = data;
         if (roomId && emoji) {
@@ -151,17 +161,20 @@ io.on('connection', (socket) => {
         }
     });
 
+    // --- Disconnection Handling ---
     socket.on('disconnect', () => {
         console.log(`User disconnected: ${socket.id}`);
 
         if (socket.roomId) {
             const roomId = socket.roomId;
 
+            // Theatre Room Viewer Count Update
             if (theatreRooms[roomId]) {
                 theatreRooms[roomId].viewers.delete(socket.id);
 
                 if (socket.id === theatreRooms[roomId].hostSocketId) {
                     console.log(`Host disconnected, closing theatre room: ${roomId}`);
+                    // Notify viewers room is closed? (optional)
                     io.to(roomId).emit('theatre_room_closed');
                     delete theatreRooms[roomId];
                 } else {
@@ -169,6 +182,7 @@ io.on('connection', (socket) => {
                 }
             }
 
+            // DropIn Chat Leave Notification
             if (socket.sessionId && socket.username) {
                 socket.to(socket.sessionId).emit('user_left_chat', {
                     user: socket.username,
@@ -198,16 +212,17 @@ io.on('connection', (socket) => {
     }
 });
 
-// --- Redirects ---
+// --- Short Link Redirects ---
 app.get('/c/:roomId', (req, res) => {
     res.redirect(`/v1.html#${req.params.roomId}`);
 });
 
+// --- Root Redirect ---
 app.get('/', (req, res) => {
     res.redirect('/v1.html');
 });
 
-// --- Start Server ---
+// --- Server Start ---
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
