@@ -1,4 +1,4 @@
-// --- server.js ---
+// --- server.js (UPDATED with maxHttpBufferSize & Express limits) ---
 
 const express = require('express');
 const http = require('http');
@@ -11,10 +11,15 @@ const io = new Server(server, {
         origin: '*',
     },
     // Increase maxHttpBufferSize if needed for larger base64 video data
-    // maxHttpBufferSize: 1e8 // 100 MB (example, adjust as needed)
+    maxHttpBufferSize: 1e8 // 100 MB (example, adjust as needed) // <-- UNCOMMENTED
 });
 
 app.use(express.static('public'));
+
+// --- ADDED Express body limits (Optional but Recommended) ---
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+// ----------------------------------------------------------
 
 // --- MAIN CONNECTION HANDLER ---
 io.on('connection', (socket) => {
@@ -92,7 +97,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🔥 **NEW: Video Drop Handler** 🔥
+    // 🔥 **VIDEO DROP Handler (Relies on increased maxHttpBufferSize)** 🔥
     socket.on('video_drop', (data) => {
         const { username, session, videoData } = data;
         if (session && username && videoData) {
