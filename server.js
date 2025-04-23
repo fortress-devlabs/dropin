@@ -33,8 +33,6 @@ app.use(express.static('public'));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// --- Keep track of users and their associated rooms ---
-const userSocketMap = new Map(); // socket.id -> { username, roomId }
 
 // --- Keep track of users, rooms, and call state ---
 const userSocketMap = new Map(); // socket.id -> { username, roomId, callState: 'idle' | 'calling' | 'receiving' | 'connected', currentCallPartnerId: string | null }
