@@ -319,6 +319,8 @@ io.on('connection', (socket) => {
     socket.on('ice_candidate', (data) => {
         const { targetSocketId, candidate } = data;
         if (!targetSocketId || !candidate) { return; }
+console.log(`[Server ICE Relay] Relaying candidate from ${socket.id} to ${targetSocketId}`);
+console.log(candidate);
         io.to(targetSocketId).emit('ice_candidate', { candidate, senderSocketId: socket.id });
     });
 
