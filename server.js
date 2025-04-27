@@ -1,7 +1,8 @@
-// --- server.js (v29.2 - Enabled Live Stream Chunk Broadcasting to Viewers) ---
+// --- server.js (v29.3 - Added /watch/:streamId route for viewers, enabled broadcasting) ---
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const path = require('path'); // <-- Required for path.join
 
 const app = express();
 const server = http.createServer(app);
@@ -37,7 +38,7 @@ const io = new Server(server, {
     maxHttpBufferSize: 1e8 // Increased buffer size (approx 100MB)
 });
 
-app.use(express.static('public'));
+app.use(express.static('public')); // Serve static files from 'public' folder
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
@@ -249,19 +250,18 @@ io.on('connection', (socket) => {
 
     // --- DropIn Live Broadcast System ---
     if (connectionContext === 'live_broadcast') {
-        // Get the liveStreamId associated with this socket IF ALREADY SET (e.g. on reconnect)
+        // Retrieve stored stream ID if available (for potential re-connection logic, though not fully implemented here)
         let liveStreamId = userSocketMap.get(socket.id)?.liveStreamId || null;
 
         socket.on('start_stream', (data) => {
             // Prevent starting if already streaming with this socket
             if (liveStreamId) {
-                 console.warn(`[DropInLive] Broadcaster ${socket.id} tried to start stream again while already having stream ${liveStreamId}.`);
-                 // Optionally re-send ACK if client might have missed it? Or emit error?
+                 console.warn(`[DropInLive] Broadcaster ${socket.id} tried to start stream again while already having stream ${liveStreamId}. Re-sending ACK.`);
                  socket.emit('stream_started_ack', { streamId: liveStreamId });
                  return;
             }
             const { title } = data;
-            liveStreamId = `stream_${socket.id}_${Date.now()}`; // Generate new stream ID
+            liveStreamId = `stream_${socket.id}_${Date.now()}`;
             socket.join(liveStreamId);
             // Update state map FIRST
             updateUserState(socket.id, { liveStreamId: liveStreamId, liveTitle: title || 'Untitled Stream' });
@@ -270,58 +270,45 @@ io.on('connection', (socket) => {
             console.log(`[DropInLive] Stream started: ${liveStreamId} - Title: ${title || 'Untitled'}`);
         });
 
-        // Event carrying video/audio chunks from broadcaster
         socket.on('live_stream_data', (data) => {
             const { streamId, chunk } = data;
-            const currentStreamId = userSocketMap.get(socket.id)?.liveStreamId; // Get current stream ID from map
+            const currentStreamId = userSocketMap.get(socket.id)?.liveStreamId;
 
-            // Validate: Ensure chunk exists and belongs to the *active* stream for this socket
             if (!streamId || !chunk || streamId !== currentStreamId) {
-                console.warn(`[DropInLive] Invalid live_stream_data received from ${socket.id}. Expected stream: ${currentStreamId}, Got: ${streamId}. Chunk valid: ${!!chunk}`);
+                console.warn(`[DropInLive] Invalid live_stream_data received from ${socket.id}. Expected: ${currentStreamId}, Got: ${streamId}. Chunk valid: ${!!chunk}`);
                 return;
             }
-
-            // *** THIS IS THE KEY FIX - Broadcast the chunk ***
-            // console.log(`[DropInLive] Received chunk for stream ${streamId}. Broadcasting...`); // Debug log
-            io.to(streamId).emit('receive_live_chunk', chunk); // Broadcast to all viewers
-
-            // Optional: Server-side recording logic could go here
-            // Be mindful of performance and storage implications
+            // *** BROADCAST CHUNK TO VIEWERS ***
+            io.to(streamId).emit('receive_live_chunk', chunk);
         });
 
         socket.on('send_live_comment', (data) => {
             const { streamId, text } = data;
             const broadcasterData = userSocketMap.get(socket.id);
             const currentStreamId = broadcasterData?.liveStreamId;
-
-            // Validate: Ensure text exists and belongs to the active stream
             if (streamId && text && streamId === currentStreamId) {
                 const username = broadcasterData?.username || `Host_${socket.id.slice(0, 5)}`;
                 io.to(streamId).emit('new_live_comment', { username, text, type: 'user' });
             } else {
-                 console.warn(`[DropInLive] Invalid send_live_comment from broadcaster ${socket.id}. Expected stream: ${currentStreamId}, Got: ${streamId}`);
+                 console.warn(`[DropInLive] Invalid send_live_comment from broadcaster ${socket.id}. Expected: ${currentStreamId}, Got: ${streamId}`);
             }
         });
 
         socket.on('end_stream', (data) => {
             const { streamId } = data;
             const currentStreamId = userSocketMap.get(socket.id)?.liveStreamId;
-
-            // Validate: Ensure request is for the active stream
             if (streamId && streamId === currentStreamId) {
                 console.log(`[DropInLive] Stream ended by broadcaster: ${streamId}`);
                 io.to(streamId).emit('live_stream_ended');
                 io.socketsLeave(streamId);
                 updateUserState(socket.id, { liveStreamId: null, liveTitle: null });
-                // Clear local variable *after* state update (though redundant if re-fetching)
-                // liveStreamId = null;
             } else {
-                 console.warn(`[DropInLive] Invalid end_stream request from broadcaster ${socket.id}. Expected stream: ${currentStreamId}, Got: ${streamId}`);
+                 console.warn(`[DropInLive] Invalid end_stream request from broadcaster ${socket.id}. Expected: ${currentStreamId}, Got: ${streamId}`);
             }
         });
     } // End Live Broadcast Context
 
-    // --- DropIn Live Viewer Connection & Interaction (Handles events from viewer clients) ---
+    // --- DropIn Live Viewer Connection & Interaction ---
     socket.on('join_live_room', (data) => {
         const { streamId } = data;
         if (streamId) {
@@ -332,14 +319,14 @@ io.on('connection', (socket) => {
                 return;
             }
             socket.join(streamId);
-            updateUserState(socket.id, { roomId: streamId }); // Track viewer's room
+            updateUserState(socket.id, { roomId: streamId });
 
             const viewerData = userSocketMap.get(socket.id);
             let joiningUsername = viewerData?.username;
             if (!joiningUsername) {
                 joiningUsername = generateGuestName();
                 updateUserState(socket.id, { username: joiningUsername });
-                socket.username = joiningUsername; // Update convenience property
+                socket.username = joiningUsername;
             }
 
             let streamTitle = 'Live Stream';
@@ -350,32 +337,30 @@ io.on('connection', (socket) => {
             }
 
             socket.emit('stream_details', { title: streamTitle, isLive: true });
-
             const numViewers = io.sockets.adapter.rooms.get(streamId)?.size || 0;
             io.to(streamId).emit('viewer_count_update', numViewers);
-
             console.log(`[DropInLive] Viewer ${joiningUsername} (${socket.id}) joined ${streamId}. Total viewers: ${numViewers}`);
         } else {
             console.warn('[DropInLive] join_live_room event missing streamId');
         }
     });
 
-    // Viewer sending a chat message during a live stream
     socket.on('send_live_comment', (data) => {
-        // Note: This handler might conflict if a 'messenger' client somehow sends this event.
-        // Consider adding a check for `context` if needed, but for now assume only viewers send this.
         const { streamId, text } = data;
-        const viewerData = userSocketMap.get(socket.id);
-
-        if (streamId && text && viewerData && socket.rooms.has(streamId)) {
-            const username = viewerData.username || `Viewer_${socket.id.slice(0, 5)}`;
+        const senderData = userSocketMap.get(socket.id);
+        // Allow sending if context is NOT broadcaster (assume viewer or messenger in live room)
+        // AND they are actually in the specified room
+        if (senderData?.context !== 'live_broadcast' && streamId && text && senderData && socket.rooms.has(streamId)) {
+            const username = senderData.username || `Viewer_${socket.id.slice(0, 5)}`;
             io.to(streamId).emit('new_live_comment', { username, text, type: 'user' });
-        } else {
-            console.warn(`[DropInLive] Invalid send_live_comment from viewer ${socket.id}. Data:`, data, `In Room: ${socket.rooms.has(streamId)}`);
+        } else if (senderData?.context === 'live_broadcast') {
+             // This case is handled within the 'live_broadcast' context block, ignore here.
+        }
+        else {
+            console.warn(`[DropInLive] Invalid send_live_comment from non-broadcaster ${socket.id}. Data:`, data, `In Room: ${socket.rooms.has(streamId)}`);
         }
     });
 
-    // Viewer sending a reaction
     socket.on('send_live_reaction', (data) => {
         const { streamId, reaction } = data;
         if (streamId && reaction && socket.rooms.has(streamId)) {
@@ -383,8 +368,7 @@ io.on('connection', (socket) => {
         }
     });
 
-
-    // --- General Call/WebRTC Handling (Used by Messenger & Dialer) ---
+    // --- General Call/WebRTC Handling ---
     socket.on('hangup_call', (data) => {
         const { targetSocketId } = data || {};
         const senderId = socket.id;
@@ -396,11 +380,7 @@ io.on('connection', (socket) => {
         const partnerToNotifyId = actualPartnerId || notifiedTargetId;
         const senderPreviousState = senderData.callState;
         updateUserState(senderId, { callState: 'idle', currentCallPartnerId: null, targetDropId: null, targetSocketId: null, requiresCode: false, targetDisplayName: null });
-        if (senderData.context === 'dialer' && senderData.targetDropId) {
-            const key = `${senderId}_${senderData.targetDropId}`;
-            delete callerAttempts[key];
-            console.log(`[Hangup] Cleared dialer attempts for key: ${key}`);
-        }
+        if (senderData.context === 'dialer' && senderData.targetDropId) { const key = `${senderId}_${senderData.targetDropId}`; delete callerAttempts[key]; console.log(`[Hangup] Cleared dialer attempts for key: ${key}`); }
         if (!partnerToNotifyId) { console.log(`[Hangup] No partner ID found or specified for hangup from ${senderId}.`); return; }
         const partnerData = userSocketMap.get(partnerToNotifyId);
         const partnerSocket = io.sockets.sockets.get(partnerToNotifyId);
@@ -409,45 +389,13 @@ io.on('connection', (socket) => {
             const partnerCurrentState = partnerData.callState;
             const partnerWasReceivingOrRinging = partnerCurrentState === 'receiving' || partnerCurrentState === 'ringing';
             const senderWasCallingOrRinging = senderPreviousState === 'calling' || senderPreviousState === 'ringing' || senderPreviousState === 'awaiting_code' || senderPreviousState === 'validating_code';
-            if (partnerWasReceivingOrRinging && senderWasCallingOrRinging) {
-                console.log(`[Hangup] Call rejected/cancelled by ${senderId} before connection. Notifying ${partnerToNotifyId} with 'call_rejected'. Partner state: ${partnerCurrentState}`);
-                io.to(partnerToNotifyId).emit('call_rejected', { rejectedBySocketId: senderId });
-            } else {
-                console.log(`[Hangup] Normal hangup or unexpected state. Notifying ${partnerToNotifyId} with 'call_hungup'. Sender state: ${senderPreviousState}, Partner state: ${partnerCurrentState}`);
-                io.to(partnerToNotifyId).emit('call_hungup', { hungupBySocketId: senderId });
-            }
+            if (partnerWasReceivingOrRinging && senderWasCallingOrRinging) { console.log(`[Hangup] Call rejected/cancelled by ${senderId} before connection. Notifying ${partnerToNotifyId} with 'call_rejected'. Partner state: ${partnerCurrentState}`); io.to(partnerToNotifyId).emit('call_rejected', { rejectedBySocketId: senderId }); }
+            else { console.log(`[Hangup] Normal hangup or unexpected state. Notifying ${partnerToNotifyId} with 'call_hungup'. Sender state: ${senderPreviousState}, Partner state: ${partnerCurrentState}`); io.to(partnerToNotifyId).emit('call_hungup', { hungupBySocketId: senderId }); }
         } else { console.log(`[Hangup] Target partner ${partnerToNotifyId} not found/disconnected. State reset.`); }
     });
-    socket.on('call_offer', (data) => {
-        const { targetSocketId, offer, callerId } = data;
-        const senderId = socket.id;
-        if (!targetSocketId || !offer) { console.warn(`[WebRTC] Invalid call_offer data from ${senderId}.`); return; }
-        const senderData = userSocketMap.get(senderId);
-        const targetData = userSocketMap.get(targetSocketId);
-        const senderContext = senderData ? senderData.context : 'unknown';
-        console.log(`[WebRTC] Relaying call_offer from ${senderId} (Context: ${senderContext}, State: ${senderData?.callState}) to ${targetSocketId}`);
-        if (!targetData) { console.log(`[WebRTC] Target ${targetSocketId} not found for offer.`); socket.emit('call_target_unavailable', { targetSocketId }); if (senderData && (senderData.callState === 'calling' || senderData.callState === 'ringing')) { updateUserState(senderId, { callState: 'idle', currentCallPartnerId: null }); } return; }
-        const acceptableTargetStates = ['receiving', 'ringing', 'idle'];
-        if (!acceptableTargetStates.includes(targetData.callState)) { console.warn(`[WebRTC] Target ${targetSocketId} busy (${targetData.callState}), cannot receive offer.`); socket.emit('call_target_busy', { targetSocketId, targetUsername: targetData.username }); if (senderData && (senderData.callState === 'calling' || senderData.callState === 'ringing')) { updateUserState(senderId, { callState: 'idle', currentCallPartnerId: null }); } return; }
-        if (targetData.callState === 'idle') { console.log(`[WebRTC] Target ${targetSocketId} was idle, setting state to 'receiving' due to offer.`); updateUserState(targetSocketId, { callState: 'receiving', currentCallPartnerId: senderId }); }
-        io.to(targetSocketId).emit('call_offer', { offer, callerSocketId: senderId, callerName: senderData ? senderData.username : null });
-    });
-    socket.on('call_answer', (data) => {
-        const { targetSocketId, answer } = data;
-        const responderId = socket.id;
-        if (!targetSocketId || !answer) { console.warn(`[WebRTC] Invalid call_answer data from ${responderId}.`); return; }
-        const responderData = userSocketMap.get(responderId);
-        const targetData = userSocketMap.get(targetSocketId);
-        if (!responderData || !targetData) { console.warn(`[WebRTC] User data not found for answer relay. Responder: ${!!responderData}, Target: ${!!targetData}`); return; }
-        const validResponderStates = ['receiving', 'ringing'];
-        const validTargetStates = ['calling', 'ringing'];
-        if (!validResponderStates.includes(responderData.callState) || !validTargetStates.includes(targetData.callState)) { console.warn(`[WebRTC] call_answer state mismatch. Responder (${responderId}): ${responderData.callState}, Target (${targetSocketId}): ${targetData.callState}. Aborting answer relay.`); return; }
-        console.log(`[WebRTC] Call connected between ${targetSocketId} (Caller) and ${responderId} (Responder)`);
-        updateUserState(responderId, { callState: 'connected' });
-        updateUserState(targetSocketId, { callState: 'connected' });
-        io.to(targetSocketId).emit('call_answer', { answer, responderSocketId: responderId });
-    });
-    socket.on('ice_candidate', (data) => { const { targetSocketId, candidate } = data; if (!targetSocketId || !candidate) { return; } io.to(targetSocketId).emit('ice_candidate', { candidate, senderSocketId: socket.id }); });
+    socket.on('call_offer', (data) => { const { targetSocketId, offer } = data; const senderId = socket.id; if (!targetSocketId || !offer) { return; } const senderData = userSocketMap.get(senderId); const targetData = userSocketMap.get(targetSocketId); console.log(`[WebRTC] Relaying call_offer from ${senderId} to ${targetSocketId}`); if (!targetData) { socket.emit('call_target_unavailable', { targetSocketId }); if (senderData?.callState === 'calling' || senderData?.callState === 'ringing') { updateUserState(senderId, { callState: 'idle', currentCallPartnerId: null }); } return; } const acceptable = ['receiving', 'ringing', 'idle']; if (!acceptable.includes(targetData.callState)) { socket.emit('call_target_busy', { targetSocketId, targetUsername: targetData.username }); if (senderData?.callState === 'calling' || senderData?.callState === 'ringing') { updateUserState(senderId, { callState: 'idle', currentCallPartnerId: null }); } return; } if (targetData.callState === 'idle') { updateUserState(targetSocketId, { callState: 'receiving', currentCallPartnerId: senderId }); } io.to(targetSocketId).emit('call_offer', { offer, callerSocketId: senderId, callerName: senderData?.username }); });
+    socket.on('call_answer', (data) => { const { targetSocketId, answer } = data; const responderId = socket.id; if (!targetSocketId || !answer) { return; } const responderData = userSocketMap.get(responderId); const targetData = userSocketMap.get(targetSocketId); if (!responderData || !targetData) { return; } const validR = ['receiving', 'ringing']; const validT = ['calling', 'ringing']; if (!validR.includes(responderData.callState) || !validT.includes(targetData.callState)) { return; } console.log(`[WebRTC] Call connected between ${targetSocketId} and ${responderId}`); updateUserState(responderId, { callState: 'connected' }); updateUserState(targetSocketId, { callState: 'connected' }); io.to(targetSocketId).emit('call_answer', { answer, responderSocketId: responderId }); });
+    socket.on('ice_candidate', (data) => { const { targetSocketId, candidate } = data; if (targetSocketId && candidate) { io.to(targetSocketId).emit('ice_candidate', { candidate, senderSocketId: socket.id }); }});
 
 
     // --- Disconnection Handling ---
@@ -459,7 +407,7 @@ io.on('connection', (socket) => {
         const { username, roomId, dropId, context, callState, currentCallPartnerId, liveStreamId } = userData;
         console.log(`[Socket] Disconnected: ${disconnectedSocketId} (User: ${username || 'N/A'}, Context: ${context}, Room: ${roomId || 'N/A'}, DropID: ${dropId || 'N/A'}, State: ${callState}). Reason: ${reason}`);
 
-        // --- Cleanup based on context and state ---
+        // Cleanup based on context and state
         if (callState !== 'idle' && currentCallPartnerId) {
             console.log(`[Disconnect] User was in call state (${callState}). Notifying partner ${currentCallPartnerId}.`);
             const partnerSocket = io.sockets.sockets.get(currentCallPartnerId);
@@ -473,7 +421,6 @@ io.on('connection', (socket) => {
         if (roomId && roomId.startsWith('stream_')) { // Viewer disconnected from a stream
              const streamId = roomId;
              console.log(`[DropInLive] Viewer ${username || disconnectedSocketId} disconnected from stream ${streamId}`);
-             // Update viewer count *after* they have left the room
              const numViewers = io.sockets.adapter.rooms.get(streamId)?.size || 0;
              io.to(streamId).emit('viewer_count_update', numViewers);
              console.log(`[DropInLive] Updated viewer count for ${streamId}: ${numViewers}`);
@@ -489,6 +436,20 @@ io.on('connection', (socket) => {
 // --- Basic HTTP Routes ---
 app.get('/c/:roomId', (req, res) => { res.redirect(`/index.html?session=${encodeURIComponent(req.params.roomId)}`); });
 app.get('/', (req, res) => { res.redirect('/index.html'); });
+
+// Route for serving the viewer page
+app.get('/watch/:streamId', (req, res) => {
+    // Serve the viewer HTML file. viewer.js will extract streamId from URL.
+    // Ensure 'viewer.html' is in the 'public' directory.
+    const viewerFilePath = path.join(__dirname, 'public', 'viewer.html');
+    res.sendFile(viewerFilePath, (err) => {
+        if (err) {
+            console.error(`[Server] Error sending viewer.html for stream ${req.params.streamId}:`, err);
+            // Avoid sending detailed error messages to client for security
+            res.status(500).send('Could not load the stream page.');
+        }
+    });
+});
 
 // Optional: Serve a blank favicon to reduce 404 errors in console
 app.get('/favicon.ico', (req, res) => res.status(204).send());
