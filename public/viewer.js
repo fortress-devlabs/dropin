@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const supportButton = document.getElementById('support-button'); // Placeholder
 
     // --- State & Config ---
-    let socket = null;
+    let socket = null; // Keep socket variable declaration here
     let mediaSource = null;
     let sourceBuffer = null;
     let streamId = null; // Will be extracted from URL or elsewhere
@@ -22,11 +22,30 @@ document.addEventListener('DOMContentLoaded', () => {
     let isSourceBufferReady = false;
     let isStreamActive = false; // Track if stream is supposed to be playing
 
-    // NOTE: Changed MIME_TYPE based on common MediaRecorder output.
-    // Ensure this EXACTLY matches the mimeType being recorded in broadcaster.js
-    // Common options: 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2'
-    // Check broadcaster.js console logs for the 'mimeType' reported when MediaRecorder starts.
-    const MIME_TYPE = 'video/webm; codecs="vp8,opus"';
+    // Initialize socket here and set binaryType
+    // IMPORTANT: Use the correct Render URL
+    socket = io('https://dropin-43k0.onrender.com', {
+        transports: ['websocket'], // Force websockets for better performance/reliability
+        // Optional: Add authentication query params if needed
+        // query: { token: 'VIEWER_AUTH_TOKEN' }
+    });
+    socket.binaryType = 'arraybuffer'; // <<<--- Ensure socket receives ArrayBuffers
+
+    // Probe for a supported mimeType (must match your broadcaster exactly).
+    const MIME_CANDIDATES = [
+      'video/webm;codecs=vp8,opus',   // exactly what your MediaRecorder is likely using (check broadcaster.js console)
+      'video/webm'                    // fallback to the simplest container
+    ];
+    const MIME_TYPE = MIME_CANDIDATES.find(m => MediaSource.isTypeSupported(m));
+    if (!MIME_TYPE) {
+      alert("❌ Your browser doesn’t support the required live-stream format.");
+      // No need to return here as initialization hasn't fully started yet,
+      // but the check in initializeMediaSource will prevent further action.
+      console.error("❌ No supported MIME type found from candidates:", MIME_CANDIDATES);
+    } else {
+        console.log("✅ Using MIME type:", MIME_TYPE);
+    }
+
 
     // --- Initialization ---
 
@@ -44,8 +63,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Function to initialize MediaSource and SourceBuffer
     function initializeMediaSource() {
-        if (!MediaSource || !MediaSource.isTypeSupported(MIME_TYPE)) { // Added check for MediaSource existence
-            console.error("MediaSource API or MIME type not supported:", MIME_TYPE);
+        // Check for MIME_TYPE support first (it might be null from probing)
+        if (!MIME_TYPE || !MediaSource || !MediaSource.isTypeSupported(MIME_TYPE)) {
+            console.error("MediaSource API or MIME type not supported:", MIME_TYPE || "None Found");
             updateStreamStatus(false, "Browser unsupported");
             alert("Your browser doesn't support the required video format or MediaSource API for this stream.");
             return;
@@ -72,6 +92,12 @@ document.addEventListener('DOMContentLoaded', () => {
             console.warn('SourceOpen called but MediaSource state is not "open":', mediaSource.readyState);
             return;
         }
+        // Ensure MIME_TYPE is valid before proceeding
+        if (!MIME_TYPE) {
+             console.error("Cannot add SourceBuffer: No valid MIME_TYPE selected.");
+             updateStreamStatus(false, "Playback error");
+             return;
+        }
         try {
             // Clean up old source buffer if exists (can happen on reconnect/retry)
             if (sourceBuffer) {
@@ -85,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 isSourceBufferReady = false;
             }
 
-            sourceBuffer = mediaSource.addSourceBuffer(MIME_TYPE);
+            sourceBuffer = mediaSource.addSourceBuffer(MIME_TYPE); // Use the probed MIME_TYPE
             sourceBuffer.mode = 'sequence'; // Important for live streams
 
             sourceBuffer.addEventListener('updateend', () => {
@@ -111,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
             processBufferQueue();
 
         } catch (error) {
-            console.error('Error adding SourceBuffer:', error, 'MediaSource ReadyState:', mediaSource.readyState);
+            console.error('Error adding SourceBuffer:', error, 'MediaSource ReadyState:', mediaSource.readyState, 'MIME Type:', MIME_TYPE);
             updateStreamStatus(false, "Playback error");
              // If addSourceBuffer fails, mediaSource might be unusable
              if (mediaSource.readyState === 'open') {
@@ -133,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 // console.log('Appending buffer chunk. Size:', chunk.byteLength);
                 isSourceBufferReady = false; // Mark as busy until updateend
-                sourceBuffer.appendBuffer(chunk);
+                sourceBuffer.appendBuffer(chunk); // Append the ArrayBuffer directly
             } catch (error) {
                 console.error('Error appending buffer:', error.name, error.message);
                 isSourceBufferReady = true; // Mark as ready again on error
@@ -160,7 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // console.log('Queueing chunk. Buffer ready:', isSourceBufferReady, 'Updating:', sourceBuffer?.updating);
             bufferQueue.push(chunk);
              // Optional: Limit queue size to prevent memory issues
-             if (bufferQueue.length > 30) { // Limit queue size (e.g., ~5 seconds at 6 chunks/sec)
+             if (bufferQueue.length > 30) { // Limit queue size (e.g., ~6 seconds at 2s TIMESLICE)
                  console.warn("Buffer queue growing large (", bufferQueue.length, "), dropping oldest chunk.");
                  bufferQueue.shift(); // Drop the oldest chunk
              }
@@ -213,24 +239,25 @@ document.addEventListener('DOMContentLoaded', () => {
     function connectWebSocket() {
         streamId = getStreamIdFromUrl();
         if (!streamId) {
-            // updateStreamStatus(false, "Invalid Stream Link"); // Already called in getStreamIdFromUrl
+            // updateStreamStatus called in getStreamIdFromUrl
             return;
         }
 
         addChatMessage({ type: 'system', text: 'Connecting to stream...' });
 
-        // Ensure any previous socket is disconnected
-        if (socket && socket.connected) {
-            socket.disconnect();
-        }
+        // Socket is already initialized globally and binaryType is set.
+        // Ensure listeners are clean before attaching.
+        socket.off('connect');
+        socket.off('stream_details');
+        socket.off('receive_live_chunk');
+        socket.off('new_live_comment');
+        socket.off('viewer_count_update');
+        socket.off('live_stream_ended');
+        socket.off('connect_error');
+        socket.off('disconnect');
+        socket.off('broadcast_reaction'); // Added for completeness
 
-        // IMPORTANT: Use the correct Render URL
-        socket = io('https://dropin-43k0.onrender.com', {
-            transports: ['websocket'], // Force websockets for better performance/reliability
-            // Optional: Add authentication query params if needed
-            // query: { token: 'VIEWER_AUTH_TOKEN' }
-        });
-
+        // Attach listeners
         socket.on('connect', () => {
             console.log('Socket connected:', socket.id);
             addChatMessage({ type: 'system', text: 'Connected. Joining stream...' });
@@ -263,13 +290,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
         // Listen for video/audio chunks
-        socket.on('receive_live_chunk', (chunk) => {
+        socket.on('receive_live_chunk', async (chunk) => { // Make handler async
              if (!isStreamActive) return; // Don't process if stream is known to be inactive
 
-            // Ensure chunk is ArrayBuffer (Socket.IO v3+ handles binary automatically)
-            if (chunk instanceof ArrayBuffer && chunk.byteLength > 0) {
-                 // console.log('Received chunk size:', chunk.byteLength);
-                 appendChunk(chunk);
+             let bufferToAppend = chunk;
+
+             // Ensure chunk is ArrayBuffer
+             if (!(bufferToAppend instanceof ArrayBuffer)) {
+                 if (bufferToAppend instanceof Blob) {
+                    console.warn("Received chunk as Blob, converting to ArrayBuffer.");
+                    try {
+                        bufferToAppend = await bufferToAppend.arrayBuffer(); // Convert Blob
+                    } catch (error) {
+                        console.error("Error converting Blob to ArrayBuffer:", error);
+                        return; // Cannot proceed with this chunk
+                    }
+                 } else {
+                    console.error("Received chunk is neither ArrayBuffer nor Blob. Type:", typeof bufferToAppend);
+                    return; // Cannot proceed
+                 }
+             }
+
+             // Ensure we have a valid ArrayBuffer with some data
+            if (bufferToAppend instanceof ArrayBuffer && bufferToAppend.byteLength > 0) {
+                 // console.log('Received chunk size:', bufferToAppend.byteLength);
+                 appendChunk(bufferToAppend); // Use the (potentially converted) ArrayBuffer
+
                  // Attempt to play if paused (e.g., after buffering or initial load)
                  // Only play if enough data is buffered to avoid immediate stall
                  if (videoPlayer.paused && videoPlayer.readyState >= videoPlayer.HAVE_FUTURE_DATA) {
@@ -289,8 +335,12 @@ document.addEventListener('DOMContentLoaded', () => {
                            // console.log("Video paused, not enough buffer ahead to play.");
                       }
                  }
-            } else {
-                console.warn("Received invalid data on 'receive_live_chunk'. Type:", typeof chunk, "Size:", chunk?.byteLength);
+            } else if (bufferToAppend.byteLength === 0) {
+                // console.log("Received empty ArrayBuffer chunk, skipping append.");
+            }
+             else {
+                // This path should theoretically not be reached after the checks above
+                console.warn("Received invalid data on 'receive_live_chunk' after checks. Type:", typeof bufferToAppend, "Size:", bufferToAppend?.byteLength);
             }
         });
 
@@ -299,9 +349,18 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         socket.on('viewer_count_update', (count) => {
-            // Corrected backticks
             viewerCountElement.textContent = `👀 ${count}`;
         });
+
+        // Listen for reactions broadcast by the server
+        socket.on('broadcast_reaction', (data) => {
+            if (data && data.reaction) {
+                // Placeholder: Implement visual feedback for the reaction
+                // console.log(`Reaction received: ${data.reaction}`);
+                // createFlyingEmoji(data.reaction); // Example function call
+            }
+        });
+
 
         socket.on('live_stream_ended', (data) => {
             console.log("Received stream ended signal. Reason:", data?.reason || "N/A");
@@ -318,12 +377,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     } else if (sourceBuffer && sourceBuffer.updating) {
                          console.warn("Stream ended, waiting for SourceBuffer update to finish before calling endOfStream.");
                          // Wait for updateend, then end stream
-                         sourceBuffer.addEventListener('updateend', () => {
-                              if (mediaSource.readyState === 'open') {
-                                   try { mediaSource.endOfStream(); console.log("MediaSource endOfStream called after updateend."); }
-                                   catch(e) { console.warn("Error ending MediaSource stream after update:", e); }
-                              }
-                         }, { once: true });
+                         const endStreamAfterUpdate = () => {
+                             if (mediaSource && mediaSource.readyState === 'open') {
+                                  try { mediaSource.endOfStream(); console.log("MediaSource endOfStream called after updateend."); }
+                                  catch(e) { console.warn("Error ending MediaSource stream after update:", e); }
+                             }
+                         };
+                         sourceBuffer.addEventListener('updateend', endStreamAfterUpdate, { once: true });
+                         // Safety timeout in case updateend never fires
+                         setTimeout(() => {
+                             sourceBuffer?.removeEventListener('updateend', endStreamAfterUpdate);
+                             endStreamAfterUpdate();
+                         } , 1000);
                     } else {
                         // No source buffer or already ended/closed
                          if (mediaSource.readyState === 'open') mediaSource.endOfStream();
@@ -340,7 +405,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         socket.on('connect_error', (err) => {
             console.error('Socket connection error:', err.message, err);
-            // Corrected backticks
             addChatMessage({ type: 'system', text: `Connection error: ${err.message}` });
             updateStreamStatus(false, "Connection Error");
             isStreamActive = false;
@@ -348,7 +412,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         socket.on('disconnect', (reason) => {
             console.log('Socket disconnected:', reason);
-            // Corrected backticks
             addChatMessage({ type: 'system', text: `Disconnected: ${reason}` });
             updateStreamStatus(false, "Disconnected");
             isStreamActive = false;
@@ -361,12 +424,26 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             // videoPlayer.src = ''; // Clear video source on disconnect
         });
+
+        // Initiate the connection if the socket isn't already connected or connecting
+        if (!socket.connected && !socket.connecting) {
+            console.log("Attempting to connect socket...");
+            socket.connect();
+        } else if (socket.connected) {
+             // If already connected (e.g., page reload with persistent socket?),
+             // manually trigger the join logic.
+             console.log("Socket already connected, manually joining stream room.");
+             socket.emit('join_live_room', { streamId: streamId });
+             isStreamActive = true; // Assume stream might be active
+             isSourceBufferReady = false;
+             bufferQueue = [];
+        }
+
     }
 
     // --- UI Updates & Chat ---
     function updateStreamStatus(isLive, statusText = "LIVE") {
         if (isLive) {
-            // Corrected backticks
             liveBadge.textContent = `🔴 ${statusText}`;
             liveBadge.style.color = 'var(--live-red)'; // Use CSS variable
             chatMessageInput.disabled = false;
@@ -374,7 +451,6 @@ document.addEventListener('DOMContentLoaded', () => {
             // Only set isStreamActive if status is actually LIVE
             if (statusText === "LIVE") isStreamActive = true;
         } else {
-            // Corrected backticks
             liveBadge.textContent = `⚫ ${statusText}`; // Use black circle for offline/ended
             liveBadge.style.color = '#666'; // Grey color
             chatMessageInput.disabled = true;
@@ -388,13 +464,11 @@ document.addEventListener('DOMContentLoaded', () => {
         item.classList.add('chat-message');
         if (message.type === 'system') {
             item.classList.add('system');
-            // Corrected backticks
             item.innerHTML = `<span>${message.text}</span>`;
         } else {
              // Basic sanitization to prevent HTML injection
             const safeUsername = (message.username || 'User').replace(/</g, "<").replace(/>/g, ">");
             const safeText = (message.text || '').replace(/</g, "<").replace(/>/g, ">");
-            // Corrected backticks
             item.innerHTML = `<strong>${safeUsername}:</strong> <span>${safeText}</span>`; // Added colon for clarity
         }
         chatFeedList.appendChild(item);
