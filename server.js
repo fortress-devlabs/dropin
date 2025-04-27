@@ -1,4 +1,4 @@
-// --- server.js (v29.4 - Replaced /public/ with /dropin-live/ for viewer.html to be found) ---
+// --- server.js (v29.4 - Commented out app.get('/watch/:streamId' ) ---
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -438,18 +438,15 @@ app.get('/c/:roomId', (req, res) => { res.redirect(`/index.html?session=${encode
 app.get('/', (req, res) => { res.redirect('/index.html'); });
 
 // Route for serving the viewer page
-app.get('/watch/:streamId', (req, res) => {
-    // Serve the viewer HTML file. viewer.js will extract streamId from URL.
-    // Ensure 'viewer.html' is in the 'public' directory.
-    const viewerFilePath = path.join(__dirname, 'dropin-live', 'viewer.html');
-    res.sendFile(viewerFilePath, (err) => {
-        if (err) {
-            console.error(`[Server] Error sending viewer.html for stream ${req.params.streamId}:`, err);
-            // Avoid sending detailed error messages to client for security
-            res.status(500).send('Could not load the stream page.');
-        }
-    });
-});
+// app.get('/watch/:streamId', (req, res) => {
+//     const viewerFilePath = path.join(__dirname, 'dropin-live', 'viewer.html');
+//     res.sendFile(viewerFilePath, (err) => {
+//         if (err) {
+//             console.error(`[Server] Error sending viewer.html for stream ${req.params.streamId}:`, err);
+//             res.status(500).send('Could not load the stream page.');
+//         }
+//     });
+// });
 
 // Optional: Serve a blank favicon to reduce 404 errors in console
 app.get('/favicon.ico', (req, res) => res.status(204).send());
