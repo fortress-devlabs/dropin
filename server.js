@@ -435,16 +435,26 @@ io.on('connection', (socket) => {
 
         // Event carrying video/audio chunks from broadcaster
         socket.on('live_stream_data', (data) => {
-            const { streamId, chunk } = data;
-            // Basic validation and broadcast to viewers in the room
-            if (streamId && chunk && streamId === liveStreamId) { // Ensure chunk is for *this* broadcaster's stream
-                 // Using volatile might reduce latency slightly for non-critical data, but increases risk of packet loss
-                 // socket.volatile.to(streamId).emit('receive_live_chunk', chunk);
-                socket.to(streamId).emit('receive_live_chunk', chunk); // Reliable broadcast
-            } else if (streamId !== liveStreamId) {
-                console.warn(`[DropInLive] Received chunk for wrong streamId ${streamId} from broadcaster ${socket.id} (expected ${liveStreamId})`);
-            }
-        });
+    const { streamId, chunk } = data;
+    if (!streamId || !chunk) {
+        console.warn(`[DropInLive] Invalid live_stream_data received.`);
+        return;
+    }
+
+    console.log(`[DropInLive] Received chunk for stream ${streamId}. Chunk size: ${chunk.size || chunk.length || 0} bytes`);
+
+    // Optionally: broadcast to viewers (later)
+    // io.to(streamId).emit('receive_live_chunk', chunk);
+
+    // Optional: Save to disk temporarily (for later full video creation)
+    /*
+    const fs = require('fs');
+    const path = require('path');
+    const streamPath = path.join(__dirname, 'streams', `${streamId}.webm`);
+    fs.appendFileSync(streamPath, chunk);
+    */
+});
+
 
         // Event for broadcaster sending a chat message
         socket.on('send_live_comment', (data) => {
