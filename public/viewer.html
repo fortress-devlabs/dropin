@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DropIn Live - Watching [Stream Title]</title>
+    <link rel="stylesheet" href="viewer.css">
+    <!-- Maybe link to a shared DropIn CSS later -->
+</head>
+<body>
+    <div class="live-viewer-layout">
+
+        <!-- Section 1: Main Content Area (Video + Interaction Below) -->
+        <main class="main-content">
+            <div class="stream-header-info">
+                <div class="title-host">
+                    <h1 id="stream-title">[Stream Title Loading...]</h1>
+                    <span id="host-name">by [Host Name]</span>
+                </div>
+                <div class="status-indicators">
+                    <span class="live-badge">🔴 LIVE</span>
+                    <span class="viewer-count" id="viewer-count">👀 --</span>
+                </div>
+            </div>
+
+            <div class="video-player-container">
+                <video id="live-video" playsinline autoplay muted controls>
+                    <!-- Needs JS to manage source buffer for live chunks -->
+                    Your browser does not support the video tag.
+                </video>
+                <!-- We can add custom overlays/controls later if needed -->
+            </div>
+
+            <div class="interaction-bar">
+                <div class="reactions">
+                    <button class="reaction-button" data-reaction="❤️">❤️</button>
+                    <button class="reaction-button" data-reaction="🔥">🔥</button>
+                    <button class="reaction-button" data-reaction="👍">👍</button>
+                    <button class="reaction-button" data-reaction="🎉">🎉</button>
+                    <!-- Add more or make configurable later -->
+                </div>
+                <div class="support-area">
+                    <!-- Placeholder for DropCash/TipDrop -->
+                    <button id="support-button" class="support-button">💰 Support Creator</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Section 2: Chat Sidebar (Adapts for Mobile) -->
+        <aside class="chat-sidebar">
+            <div class="chat-feed-container">
+                <ul id="chat-feed-list">
+                    <!-- Chat messages appear here (<li> elements) -->
+                    <li class="chat-message system"><span>Connecting to chat...</span></li>
+                </ul>
+            </div>
+            <div class="chat-input-container">
+                <input type="text" id="chat-message-input" placeholder="Join the conversation...">
+                <button id="send-chat-button">Send</button>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- JavaScript - Will handle connections, video playback, chat updates -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script> <!-- Assuming Socket.IO -->
+    <script src="viewer.js"></script>
+</body>
+</html>

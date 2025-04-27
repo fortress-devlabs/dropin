@@ -1,4 +1,4 @@
-// --- server.js v29.4 - Corrected & Configured for Dual Static Folders ---
+// --- server.js v29.7 - Corrected & Configured for Single 'public' Static Folder ---
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -39,11 +39,9 @@ const io = new Server(server, {
 });
 
 // --- Static File Serving ---
-// Serve general static files (index.html, etc.) from 'public'
+// Serve ALL static files (index.html, viewer.html, etc.) from 'public'
 app.use(express.static('public'));
-// ALSO serve live-streaming specific static files (viewer.html, viewer.js, etc.) from 'dropin-live'
-// Express will look in 'public' first, then 'dropin-live' if not found in 'public'.
-app.use(express.static('dropin-live'));
+// REMOVED: app.use(express.static('dropin-live'));
 
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
@@ -440,14 +438,20 @@ app.get('/', (req, res) => { res.redirect('/index.html'); });
 
 // Route for serving the viewer page
 app.get('/watch/:streamId', (req, res) => {
-    // Serve the viewer HTML file specifically from 'dropin-live'.
-    // Associated assets (viewer.js, viewer.css) will also be found in 'dropin-live'
-    // because of the second app.use(express.static('dropin-live')) line above.
-    const viewerFilePath = path.join(__dirname, 'dropin-live', 'viewer.html');
+    // Serve the viewer HTML file from the 'public' directory.
+    // Associated assets (viewer.js, viewer.css) will also be found in 'public'
+    // because of the single app.use(express.static('public')) line above.
+    const viewerFilePath = path.join(__dirname, 'public', 'viewer.html'); // <-- Changed back to 'public'
     res.sendFile(viewerFilePath, (err) => {
         if (err) {
+            // Log the error on the server, but don't expose details to the client
             console.error(`[Server] Error sending viewer.html for stream ${req.params.streamId}:`, err);
-            res.status(500).send('Could not load the stream page.');
+            // Check if the error is because the file doesn't exist
+            if (err.code === 'ENOENT') {
+                 res.status(404).send('Stream viewer page not found.');
+            } else {
+                 res.status(500).send('Could not load the stream page due to a server error.');
+            }
         }
     });
 });
@@ -459,7 +463,7 @@ app.get('/favicon.ico', (req, res) => res.status(204).send());
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🚀 Drop Server running on port ${PORT}`);
-    console.log(`   Static files served from: 'public' (primary), 'dropin-live' (secondary)`);
+    console.log(`   Static files served from: 'public'`); // <-- Updated log message
     console.log(`   Live Mode Enabled`);
     console.log(`   Messenger/Dialer/Receiver Modes Enabled`);
 });

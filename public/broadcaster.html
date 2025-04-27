@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DropIn Live Studio</title>
+    <link rel="stylesheet" href="broadcaster.css">
+    <!-- Shared DropIn CSS might be linked later -->
+</head>
+<body>
+    <div class="studio-layout">
+
+        <!-- Section 1: Main Control & Preview Area -->
+        <section class="main-panel">
+            <header class="studio-header">
+                <h2>Your Live Studio</h2>
+                <div class="stream-status" id="stream-status-indicator">
+                    <span class="status-dot offline"></span> OFFLINE
+                </div>
+            </header>
+
+            <div class="preview-container">
+                <video id="video-preview" playsinline autoplay muted>
+                    <!-- Camera feed will be shown here via JS -->
+                    Your browser doesn't support video preview.
+                </video>
+                <div class="overlay-info" id="preview-overlay">
+                    <!-- Info like "Select camera" or "Ready to Go Live" -->
+                    <p>Initializing Camera...</p>
+                </div>
+            </div>
+
+            <div class="stream-setup">
+                <div class="input-group">
+                    <label for="stream-title">Stream Title:</label>
+                    <input type="text" id="stream-title" placeholder="What's your stream about?">
+                </div>
+                <!-- Optional: Thumbnail upload, category selection later -->
+            </div>
+
+            <div class="stream-controls">
+                 <div class="device-select">
+                    <select id="camera-select" aria-label="Select Camera">
+                        <option value="">Loading Cameras...</option>
+                    </select>
+                    <select id="mic-select" aria-label="Select Microphone">
+                        <option value="">Loading Mics...</option>
+                    </select>
+                 </div>
+                 <button id="go-live-button" class="button-primary">Go Live</button>
+                 <button id="end-stream-button" class="button-danger" style="display: none;">End Stream</button>
+            </div>
+
+             <div class="live-stats" id="live-stats-display" style="display: none;">
+                <span class="stat-item viewers">Viewers: <strong id="live-viewer-count">0</strong></span>
+                <span class="stat-item duration">Duration: <strong id="live-duration">00:00</strong></span>
+                <!-- Add Reactions/Tips counts later -->
+            </div>
+        </section>
+
+        <!-- Section 2: Chat & Activity Panel -->
+        <aside class="chat-activity-panel">
+            <div class="tabs">
+                <button class="tab-button active" data-tab="chat">Live Chat</button>
+                <button class="tab-button" data-tab="activity">Activity</button> <!-- For later: Follows, Tips -->
+            </div>
+
+            <div class="tab-content active" id="tab-chat">
+                <div class="chat-feed-container studio-chat-feed">
+                    <ul id="studio-chat-list">
+                        <!-- Live chat messages appear here -->
+                        <li class="chat-message system"><span>Waiting for stream to start...</span></li>
+                    </ul>
+                </div>
+                <div class="chat-input-container studio-chat-input">
+                    <input type="text" id="studio-chat-message" placeholder="Send a message to viewers...">
+                    <button id="studio-send-chat">Send</button>
+                </div>
+            </div>
+
+            <div class="tab-content" id="tab-activity">
+                <p>Activity feed coming soon (e.g., new followers, tips).</p>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- JavaScript -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="broadcaster.js"></script>
+</body>
+</html>

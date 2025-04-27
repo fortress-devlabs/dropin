@@ -1,0 +1,430 @@
+/* broadcaster.css - MOBILE-FIRST Responsive Styles for DropIn Live Studio */
+
+/* --- Variables --- */
+:root {
+    --studio-bg: #f0f2f5;         /* Slightly cooler background */
+    --panel-bg: #ffffff;
+    --text-color: #1d2129;      /* Darker text, FB style */
+    --text-secondary: #65676b;  /* Grey for secondary text */
+    --primary-blue: #1877f2;    /* FB-like blue */
+    --primary-hover: #166fe5;
+    --danger-red: #fa383e;      /* Bright red for danger actions */
+    --danger-hover: #e0282e;
+    --success-green: #42b72a;   /* Green for live status */
+    --offline-grey: #606770;
+    --border-color: #ccd0d5;
+    --input-bg: #f5f6f7;
+    --font-family: system-ui, -apple-system, BlinkMacSystemFont, '.SFNSText-Regular', sans-serif; /* System fonts */
+    --mobile-padding: 12px;
+    --desktop-padding: 16px;
+}
+
+/* --- Basic Reset & Body (Mobile First) --- */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    font-size: 16px;
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--studio-bg);
+    color: var(--text-color);
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+/* --- Main Layout Container (Mobile First - Column) --- */
+.studio-layout {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    flex-grow: 1;
+}
+
+/* --- Utility Button Styles --- */
+.button-primary {
+    background-color: var(--primary-blue);
+    color: white;
+    border: none;
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    text-align: center;
+}
+.button-primary:hover {
+    background-color: var(--primary-hover);
+}
+.button-primary:disabled {
+    background-color: #bcc0c4;
+    cursor: not-allowed;
+}
+
+.button-danger {
+    background-color: var(--danger-red);
+    color: white;
+    border: none;
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    text-align: center;
+}
+.button-danger:hover {
+    background-color: var(--danger-hover);
+}
+
+/* --- Main Control & Preview Panel (Mobile) --- */
+.main-panel {
+    order: 1; /* Control panel first on mobile */
+    width: 100%;
+    padding: var(--mobile-padding);
+    background-color: var(--panel-bg);
+    /* Optional: Add shadow later if needed */
+}
+
+.studio-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+}
+
+.studio-header h2 {
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.stream-status {
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.status-dot.offline { background-color: var(--offline-grey); }
+.status-dot.live { background-color: var(--success-green); }
+/* Add .starting, .ending states later */
+
+.preview-container {
+    width: 100%;
+    background-color: #000;
+    margin-bottom: 15px;
+    position: relative;
+    aspect-ratio: 21 / 9;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+#video-preview {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain; /* Or 'cover' depending on desired preview */
+}
+
+.overlay-info {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 10px;
+    font-size: 0.9rem;
+}
+.overlay-info p { display: none; } /* Hide default text, show via JS */
+.overlay-info.active p { display: block; }
+
+.stream-setup {
+    margin-bottom: 15px;
+}
+
+.input-group {
+    margin-bottom: 10px;
+}
+
+.input-group label {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+}
+
+.input-group input[type="text"],
+.device-select select {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 0.95rem;
+    background-color: var(--input-bg);
+}
+.device-select select {
+    appearance: none; /* Basic style reset for selects */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2365676B'%3E%3Cpath d='M6 9l-4-4h8z'/%3E%3C/svg%3E"); /* Simple dropdown arrow */
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 30px; /* Space for arrow */
+}
+
+.stream-controls {
+    display: flex;
+    flex-direction: column; /* Stack controls vertically on mobile */
+    gap: 10px;
+    margin-bottom: 15px;
+}
+.device-select {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Initially hide elements shown only when live */
+#end-stream-button,
+#live-stats-display {
+    display: none;
+}
+
+.live-stats {
+    padding: 10px;
+    background-color: #f0f2f5; /* Slightly different bg for stats */
+    border-radius: 6px;
+    font-size: 0.9rem;
+    display: flex;
+    flex-wrap: wrap; /* Allow wrapping if needed */
+    gap: 15px;
+    color: var(--text-secondary);
+}
+.stat-item strong {
+    color: var(--text-color);
+    font-weight: 600;
+    margin-left: 4px;
+}
+
+/* --- Chat & Activity Panel (Mobile) --- */
+.chat-activity-panel {
+    order: 2; /* Chat below main panel on mobile */
+    width: 100%;
+    background-color: var(--panel-bg);
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1; /* Takes remaining vertical space */
+    border-top: 1px solid var(--border-color);
+}
+
+.tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.tab-button {
+    flex: 1;
+    padding: 12px 10px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent; /* Placeholder for active indicator */
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: center;
+    transition: color 0.2s ease, border-color 0.2s ease;
+}
+.tab-button:hover {
+    background-color: #f5f6f7;
+}
+.tab-button.active {
+    color: var(--primary-blue);
+    border-bottom-color: var(--primary-blue);
+}
+
+.tab-content {
+    display: none; /* Hide inactive tabs */
+    flex-grow: 1;
+    /* Setup flex for chat content specifically */
+}
+.tab-content.active {
+    display: flex; /* Show active tab */
+    flex-direction: column; /* Make chat content flex column */
+}
+
+/* Apply chat styles only within the active chat tab */
+.tab-content#tab-chat.active {
+     /* Container takes available space */
+}
+
+.chat-feed-container.studio-chat-feed {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: var(--mobile-padding);
+    min-height: 150px; /* Ensure minimum chat area */
+}
+
+#studio-chat-list {
+    list-style: none;
+}
+/* Inherit chat message styles from viewer or define studio-specific ones */
+/* Example using simple styling: */
+.chat-message {
+    margin-bottom: 10px;
+    padding: 6px 10px;
+    border-radius: 12px;
+    background-color: #f0f2f5;
+    word-wrap: break-word;
+    font-size: 0.9rem;
+    max-width: 95%;
+}
+.chat-message.system {
+    font-style: italic;
+    color: #7f8c8d;
+    background-color: transparent;
+    text-align: center;
+    font-size: 0.8rem;
+    padding: 2px 0;
+}
+.chat-message strong {
+    font-weight: 600;
+    color: var(--primary-blue);
+    margin-right: 6px;
+    display: block;
+    font-size: 0.8rem;
+    margin-bottom: 2px;
+}
+
+.chat-input-container.studio-chat-input {
+    padding: var(--mobile-padding);
+    border-top: 1px solid var(--border-color);
+    background-color: #fff;
+    display: flex;
+    gap: 8px;
+}
+
+#studio-chat-message {
+    flex-grow: 1;
+    padding: 10px 15px;
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    font-size: 0.9rem;
+    background-color: var(--input-bg);
+}
+
+#studio-send-chat {
+    padding: 10px 15px;
+    background-color: var(--primary-blue);
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.9rem;
+    transition: background-color 0.2s ease;
+    flex-shrink: 0;
+}
+#studio-send-chat:hover {
+    background-color: var(--primary-hover);
+}
+
+/* --- Responsiveness (Desktop Enhancements) --- */
+@media (min-width: 992px) { /* Breakpoint for larger screens */
+
+    .studio-layout {
+        flex-direction: row; /* Side-by-side layout */
+    }
+
+    .main-panel {
+        flex: 2; /* Main panel takes more space, e.g., ~66% */
+        order: 0; /* Reset order */
+        height: 100vh; /* Full viewport height */
+        padding: var(--desktop-padding);
+        overflow-y: auto; /* Allow scrolling if content exceeds viewport */
+        border-right: 1px solid var(--border-color); /* Separator */
+        background-color: var(--panel-bg); /* Keep panel background */
+    }
+
+    .chat-activity-panel {
+        flex: 1; /* Chat panel takes ~33% */
+        order: 0; /* Reset order */
+        height: 100vh;
+        border-top: none; /* Remove top border */
+        position: sticky; /* Keep chat visible */
+        top: 0;
+        background-color: var(--panel-bg); /* Ensure background */
+        flex-grow: 0; /* Don't allow growing */
+    }
+
+    .studio-header h2 {
+        font-size: 1.4rem;
+    }
+
+    .stream-controls {
+        flex-direction: row; /* Controls side-by-side */
+        align-items: center; /* Align items vertically */
+        justify-content: space-between; /* Space out controls */
+        gap: 15px;
+    }
+    .device-select {
+        flex-direction: row; /* Selects side-by-side */
+        flex-grow: 1; /* Allow selects to take space */
+        gap: 10px;
+    }
+    .device-select select {
+       /* Adjust width if needed, e.g., flex-basis: 48%; */
+    }
+    /* Make buttons slightly larger on desktop */
+    .button-primary, .button-danger {
+        padding: 12px 20px;
+        font-size: 1rem;
+        flex-shrink: 0; /* Prevent buttons shrinking */
+    }
+
+     #studio-chat-message, #studio-send-chat {
+         font-size: 0.95rem; /* Slightly larger chat input */
+     }
+
+    .chat-feed-container.studio-chat-feed {
+         /* Height is determined by flex-grow within the fixed-height sidebar */
+         padding: var(--desktop-padding);
+         min-height: none; /* Remove mobile min-height */
+     }
+
+     .chat-input-container.studio-chat-input {
+        padding: var(--desktop-padding);
+        /* Input naturally stays at bottom due to flex layout */
+    }
+
+     .tabs {
+        padding: 0 var(--desktop-padding); /* Add padding around tabs */
+     }
+     .tab-button {
+         flex: 0 0 auto; /* Don't stretch tabs, let them size naturally */
+         padding: 15px 16px;
+     }
+}
