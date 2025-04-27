@@ -1,4 +1,4 @@
-// --- server.js (v29.0 - Added DropIn Live Broadcast & Viewer System, Guest Names) ---
+// --- server.js (v29.2 - DropInLive - Added Code Line To Broadcast To Viewers) ---
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -443,8 +443,8 @@ io.on('connection', (socket) => {
 
     console.log(`[DropInLive] Received chunk for stream ${streamId}. Chunk size: ${chunk.size || chunk.length || 0} bytes`);
 
-    // Optionally: broadcast to viewers (later)
-    // io.to(streamId).emit('receive_live_chunk', chunk);
+   io.to(streamId).emit('receive_live_chunk', chunk);
+});
 
     // Optional: Save to disk temporarily (for later full video creation)
     /*
