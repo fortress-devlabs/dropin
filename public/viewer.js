@@ -26,7 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Ensure this EXACTLY matches the mimeType being recorded in broadcaster.js
     // Common options: 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2'
     // Check broadcaster.js console logs for the 'mimeType' reported when MediaRecorder starts.
-    const MIME_TYPE = 'video/webm;codecs=vp8,opus'; // MAKE SURE THIS MATCHES BROADCASTER
+    const MIME_TYPE = 'video/webm; codecs="vp8,opus"';
 
     // --- Initialization ---
 
