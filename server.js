@@ -1,4 +1,4 @@
-// --- server.js (v29.3 - Added /watch/:streamId route for viewers, enabled broadcasting) ---
+// --- server.js (v29.4 - Replaced /public/ with /dropin-live/ for viewer.html to be found) ---
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -441,7 +441,7 @@ app.get('/', (req, res) => { res.redirect('/index.html'); });
 app.get('/watch/:streamId', (req, res) => {
     // Serve the viewer HTML file. viewer.js will extract streamId from URL.
     // Ensure 'viewer.html' is in the 'public' directory.
-    const viewerFilePath = path.join(__dirname, 'public', 'viewer.html');
+    const viewerFilePath = path.join(__dirname, 'dropin-live', 'viewer.html');
     res.sendFile(viewerFilePath, (err) => {
         if (err) {
             console.error(`[Server] Error sending viewer.html for stream ${req.params.streamId}:`, err);
