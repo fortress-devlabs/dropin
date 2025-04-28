@@ -1,3 +1,4 @@
+// v31.0: Add MIME probe, first chunk logging, use broadcaster MIME type, refactor addSourceBuffer logic.
 // viewer.js - Client-side logic for the DropIn Live Viewer Page
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -14,75 +15,126 @@ document.addEventListener('DOMContentLoaded', () => {
     const supportButton = document.getElementById('support-button'); // Placeholder
 
     // --- State & Config ---
-    let socket = null; // Keep socket variable declaration here
+    let socket = null;
     let mediaSource = null;
     let sourceBuffer = null;
-    let streamId = null; // Will be extracted from URL or elsewhere
-    let bufferQueue = []; // Queue for chunks arriving before SourceBuffer is ready
-    let isSourceBufferReady = false;
-    let isStreamActive = false; // Track if stream is supposed to be playing
+    let streamId = null;
+    let bufferQueue = [];
+    let isSourceBufferReady = false; // Flag if SB is added and ready for appendBuffer
+    let isStreamActive = false;
+    let receivedMimeType = null; // Store mimeType from broadcaster
+    let isMediaSourceOpen = false; // Flag if 'sourceopen' has fired
+    let sawFirstChunk = false; // Flag for logging first chunk bytes
 
-    // 1) Force the websocket layer to give you ArrayBuffers
+    // Initialize socket with ArrayBuffer transport option
     socket = io('https://dropin-43k0.onrender.com', {
       transports: ['websocket'],
       transportOptions: {
-        websocket: { binaryType: 'arraybuffer' } // <<<--- Set binaryType here
+        websocket: { binaryType: 'arraybuffer' }
       }
-      // Optional: Add authentication query params if needed
-      // query: { token: 'VIEWER_AUTH_TOKEN' }
     });
-    // REMOVED: socket.binaryType = 'arraybuffer'; // <<<--- No longer needed here
 
-    // 2) Normalize to the exact MSE-expected string
-    const rawMimeTypeFromBroadcaster = 'video/webm;codecs=vp8,opus'; // Based on broadcaster log
-    // Format needed for MSE: space after semicolon, quotes around codecs
-    const FORMATTED_MSE_MIME_TYPE = rawMimeTypeFromBroadcaster.replace(';codecs=', '; codecs="') + '"';
-    // => 'video/webm; codecs="vp8,opus"'
+    // --- Debugging & Initialization ---
 
-    // Check if the *formatted* type is supported
-    if (!MediaSource.isTypeSupported(FORMATTED_MSE_MIME_TYPE)) {
-      alert("❌ Your browser doesn’t support the required video format (video/webm; codecs=\"vp8,opus\").");
-      // Cannot proceed if the format isn't supported
-      console.error("❌ Browser does not support required MSE MIME type:", FORMATTED_MSE_MIME_TYPE);
-      return; // Stop execution here
-    } else {
-        console.log("✅ Using MSE mime-type:", FORMATTED_MSE_MIME_TYPE);
+    // Function to probe MIME type variants (as provided in instructions)
+    function debugMimeVariants(ms) {
+        // Check if MediaSource object is valid and open
+        if (!ms || ms.readyState !== 'open') {
+            console.warn("debugMimeVariants called but MediaSource is not open or valid.");
+            return;
+        }
+        const variants = [
+            'video/webm;codecs=vp8,opus',       // Raw, no space, no quotes
+            'video/webm; codecs=vp8,opus',      // Space, no quotes
+            'video/webm;codecs="vp8,opus"',     // No space, quotes
+            'video/webm; codecs="vp8,opus"',    // Space, quotes (often the one needed by MSE)
+            'video/webm'                        // Container only
+        ];
+
+        console.group("🎯 MIME variant support test");
+        variants.forEach(v => {
+            let sb = null; // Declare sb here to ensure it's accessible in finally
+            try {
+                const ok = MediaSource.isTypeSupported(v);
+                console.log(`- Checking variant: "${v}" -> isTypeSupported: ${ok}`);
+                if (!ok) throw new Error("isTypeSupported returned false");
+
+                // Attempt to add and immediately remove a SourceBuffer
+                sb = ms.addSourceBuffer(v);
+                console.log(`  ✅ addSourceBuffer OK for → "${v}"`);
+            } catch (e) {
+                console.warn(`  ❌ addSourceBuffer FAILED for → "${v}"`, e.message || e);
+            } finally {
+                // Ensure buffer is removed if it was successfully added
+                if (sb && ms.readyState === 'open') {
+                    try {
+                        ms.removeSourceBuffer(sb);
+                        // console.log(`  🧹 Cleaned up test SourceBuffer for "${v}"`);
+                    } catch (removeError) {
+                        console.warn(`  ⚠️ Error removing test SourceBuffer for "${v}"`, removeError);
+                    }
+                }
+            }
+        });
+        console.groupEnd();
     }
-    // REMOVED: MIME_CANDIDATES array and find logic
 
 
-    // --- Initialization ---
-
-    // Function to extract Stream ID from URL (Example: /watch/xyz123)
+    // Function to extract Stream ID from URL
     function getStreamIdFromUrl() {
         const pathSegments = window.location.pathname.split('/').filter(Boolean);
-        // Assuming the path is /watch/STREAM_ID
         if (pathSegments.length === 2 && pathSegments[0].toLowerCase() === 'watch') {
-             return pathSegments[1]; // Return the second segment
+             return pathSegments[1];
         }
         console.error("Could not determine Stream ID from URL path:", window.location.pathname);
-        updateStreamStatus(false, "Invalid Link"); // Update UI
-        return null; // Or handle error appropriately
+        updateStreamStatus(false, "Invalid Link");
+        return null;
     }
 
-    // Function to initialize MediaSource and SourceBuffer
+    // Function to initialize MediaSource object
     function initializeMediaSource() {
-        // Check MediaSource API itself first
         if (!window.MediaSource) {
-            console.error("MediaSource API not supported in this browser.");
+            console.error("MediaSource API not supported.");
             updateStreamStatus(false, "Browser unsupported");
             alert("Your browser doesn't support the MediaSource API required for this stream.");
             return;
         }
-        // MIME type support is already checked above
+
+        // Clean up previous MediaSource if any
+        if (mediaSource && mediaSource.readyState !== 'closed') {
+             console.warn("Cleaning up existing MediaSource object.");
+             try {
+                 if (videoPlayer.src) {
+                      URL.revokeObjectURL(videoPlayer.src);
+                      videoPlayer.src = '';
+                      videoPlayer.removeAttribute('src'); // Force removal
+                 }
+                 // Attempt to end stream if open
+                  if (mediaSource.readyState === 'open') {
+                       mediaSource.endOfStream();
+                  }
+             } catch(e) { console.warn("Error during old MediaSource cleanup:", e); }
+        }
+        // Reset related state
+        mediaSource = null;
+        sourceBuffer = null;
+        isMediaSourceOpen = false;
+        isSourceBufferReady = false;
+        bufferQueue = []; // Clear queue on re-initialization
 
         try {
+            console.log("Creating new MediaSource instance.");
             mediaSource = new MediaSource();
             videoPlayer.src = URL.createObjectURL(mediaSource);
 
             mediaSource.addEventListener('sourceopen', handleSourceOpen, { once: true });
             mediaSource.addEventListener('sourceended', () => console.log('MediaSource sourceended. ReadyState:', mediaSource?.readyState));
-            mediaSource.addEventListener('sourceclose', () => console.log('MediaSource sourceclose. ReadyState:', mediaSource?.readyState));
+            mediaSource.addEventListener('sourceclose', () => {
+                console.log('MediaSource sourceclose. ReadyState:', mediaSource?.readyState);
+                // Reset flags when source closes
+                isMediaSourceOpen = false;
+                isSourceBufferReady = false;
+            });
 
         } catch (error) {
             console.error("Error creating MediaSource:", error);
@@ -90,166 +142,162 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Called when MediaSource is ready
     function handleSourceOpen() {
         console.log('MediaSource opened. ReadyState:', mediaSource.readyState);
-        // Ensure sourceopen isn't called if already closed/ended
-        if (mediaSource.readyState !== 'open') {
-            console.warn('SourceOpen called but MediaSource state is not "open":', mediaSource.readyState);
+        isMediaSourceOpen = true;
+
+        // Run the debug probe
+        debugMimeVariants(mediaSource);
+
+        // Attempt to add the source buffer *if* we have already received the mimeType
+        if (receivedMimeType) {
+            console.log("MediaSource opened and mimeType was already received. Attempting addSourceBuffer.");
+            addSourceBuffer();
+        } else {
+             console.log("MediaSource opened, waiting for stream_details to receive mimeType.");
+        }
+    }
+
+    // Function to add the SourceBuffer (needs MediaSource open and mimeType known)
+    function addSourceBuffer() {
+        // Guard conditions
+        if (!isMediaSourceOpen) {
+            console.warn("addSourceBuffer called but MediaSource is not open.");
             return;
         }
-        // MIME_TYPE support is checked globally now.
+        if (!receivedMimeType) {
+            console.warn("addSourceBuffer called but mimeType is not known.");
+            return;
+        }
+        if (sourceBuffer) {
+             console.warn("addSourceBuffer called but sourceBuffer already exists.");
+             return; // Avoid adding multiple buffers
+        }
+        // Check MediaSource state again just before adding
+        if (mediaSource.readyState !== 'open') {
+             console.error("MediaSource state is not 'open' right before addSourceBuffer. Aborting.");
+             isMediaSourceOpen = false; // Update flag
+             return;
+        }
 
+        console.log(`Attempting to addSourceBuffer with received mimeType: "${receivedMimeType}"`);
         try {
-            // Clean up old source buffer if exists (can happen on reconnect/retry)
-            if (sourceBuffer) {
-                console.warn("Removing existing source buffer before adding new one.");
-                try {
-                   // Check if mediaSource is still open before removing
-                   if(mediaSource.readyState === 'open') {
-                       mediaSource.removeSourceBuffer(sourceBuffer);
-                   }
-                } catch (removeErr) {
-                    // Ignore errors removing old buffer if it's already detached or invalid
-                    console.warn("Non-critical error removing old source buffer:", removeErr);
-                }
-                sourceBuffer = null; // Reset reference
-                isSourceBufferReady = false;
-            }
-
-            console.log("Attempting to addSourceBuffer with:", FORMATTED_MSE_MIME_TYPE);
-            sourceBuffer = mediaSource.addSourceBuffer(FORMATTED_MSE_MIME_TYPE); // Use the exact formatted string
-            sourceBuffer.mode = 'sequence'; // Important for live streams
+            // Use the mimeType received from the broadcaster
+            sourceBuffer = mediaSource.addSourceBuffer(receivedMimeType);
+            sourceBuffer.mode = 'sequence';
+            console.log("✅ SourceBuffer added successfully.");
 
             sourceBuffer.addEventListener('updateend', () => {
-                // console.log('SourceBuffer updateend. Updating:', sourceBuffer.updating);
-                isSourceBufferReady = true; // Mark as ready to accept next chunk
-                // Process any queued chunks
+                isSourceBufferReady = true;
                 processBufferQueue();
             });
-
             sourceBuffer.addEventListener('error', (e) => {
-                // Log the specific event if possible, otherwise just the fact
-                const errorDetail = sourceBuffer.error || e;
-                console.error('SourceBuffer error event:', errorDetail);
+                console.error('SourceBuffer error event:', sourceBuffer.error || e);
                 updateStreamStatus(false, "Playback error");
-                // Potentially more drastic error handling needed here
-                isStreamActive = false; // Stop trying to append on buffer error
+                isStreamActive = false;
+                isSourceBufferReady = false; // SB no longer ready
                 bufferQueue = [];
-                 if (mediaSource.readyState === 'open') {
-                      try { mediaSource.endOfStream(); } catch(eosErr){}
-                 }
+                if (mediaSource.readyState === 'open') {
+                    try { mediaSource.endOfStream(); } catch(eosErr){}
+                }
             });
             sourceBuffer.addEventListener('abort', () => {
                  console.warn('SourceBuffer aborted.');
-                 isSourceBufferReady = false; // Buffer is no longer valid
+                 isSourceBufferReady = false;
             });
 
-
-            // Start processing queue immediately after buffer is added
+            // Set ready and process queue immediately after adding
             isSourceBufferReady = true;
             processBufferQueue();
 
         } catch (error) {
-            console.error('Error adding SourceBuffer:', error, 'MediaSource ReadyState:', mediaSource.readyState, 'MIME Type:', FORMATTED_MSE_MIME_TYPE);
+            console.error(`❌ Error adding SourceBuffer with mimeType "${receivedMimeType}":`, error);
             updateStreamStatus(false, "Playback error");
-             // If addSourceBuffer fails, mediaSource might be unusable
-             if (mediaSource.readyState === 'open') {
-                  try { mediaSource.endOfStream(); } catch(e){}
-             }
+            // If addSourceBuffer fails, the MediaSource might be unusable
+            if (mediaSource.readyState === 'open') {
+                try { mediaSource.endOfStream(); } catch(e){}
+            }
         }
     }
 
-    // Function to add chunks to the buffer or queue them
+
+    // Function to append chunks
     function appendChunk(chunk) {
-         // Guard against adding chunks if stream ended or buffer errored
-         if (!isStreamActive || !sourceBuffer || mediaSource.readyState !== 'open') {
-              // console.log("Skipping appendChunk: Stream inactive, no buffer, or MediaSource not open.");
-              if (bufferQueue.length > 0) {
-                   console.warn("Clearing buffer queue as stream is inactive or buffer invalid.");
-                   bufferQueue = []; // Clear queue if stream is inactive
-              }
+         if (!isStreamActive || !sourceBuffer || !isSourceBufferReady || mediaSource.readyState !== 'open') {
+              if (!isStreamActive) console.warn("Skipping appendChunk: Stream not active.");
+              else if (!sourceBuffer) console.warn("Skipping appendChunk: SourceBuffer doesn't exist.");
+              else if (!isSourceBufferReady) console.warn("Skipping appendChunk: SourceBuffer not ready (maybe updating or errored).");
+              else if (mediaSource.readyState !== 'open') console.warn("Skipping appendChunk: MediaSource not open.");
+
+              // Don't clear queue here, wait for stream end or explicit error
               return;
          }
 
-        if (isSourceBufferReady && !sourceBuffer.updating) {
+        if (!sourceBuffer.updating) {
             try {
                 // console.log('Appending buffer chunk. Size:', chunk.byteLength);
                 isSourceBufferReady = false; // Mark as busy until updateend
-                sourceBuffer.appendBuffer(chunk); // Append the ArrayBuffer directly
+                sourceBuffer.appendBuffer(chunk);
             } catch (error) {
-                // Specific catch block as requested
                 console.error("❌ appendBuffer threw:", error);
-                isSourceBufferReady = true; // Mark as ready again on error, although the buffer might be broken
-
-                // Handle specific errors if needed, or rely on the 'error' event listener
+                // Attempt recovery or state reset depending on error
+                isSourceBufferReady = true; // Cautiously reset flag, may need error handler intervention
                 if (error.name === 'QuotaExceededError') {
-                    console.warn('QuotaExceededError directly from appendBuffer. Attempting cleanup.');
+                    console.warn('QuotaExceededError: Buffer full. Attempting cleanup.');
                     cleanupBuffer();
-                     // Re-queueing might cause infinite loops if cleanup fails repeatedly
-                     // bufferQueue.unshift(chunk);
+                    // Avoid re-queueing immediately to prevent potential loops
                 } else {
-                    // For other errors caught here, the buffer is likely unusable.
                     updateStreamStatus(false, "Playback Error");
-                    isStreamActive = false; // Stop trying to append
+                    isStreamActive = false;
                     if (mediaSource.readyState === 'open') {
                         try { mediaSource.endOfStream(); } catch(eosErr) {}
                     }
                 }
             }
         } else {
-            // If buffer isn't ready or is updating, queue the chunk
-            // console.log('Queueing chunk. Buffer ready:', isSourceBufferReady, 'Updating:', sourceBuffer?.updating);
+            // console.log('Queueing chunk, SourceBuffer is updating.');
             bufferQueue.push(chunk);
-             // Optional: Limit queue size to prevent memory issues
-             if (bufferQueue.length > 50) { // Increased limit slightly
-                 console.warn("Buffer queue growing large (", bufferQueue.length, "), dropping oldest chunk.");
-                 bufferQueue.shift(); // Drop the oldest chunk
+             if (bufferQueue.length > 50) {
+                 console.warn("Buffer queue limit reached (", bufferQueue.length, "), dropping oldest chunk.");
+                 bufferQueue.shift();
              }
         }
     }
 
-    // Process queued chunks when SourceBuffer is ready
+    // Process queued chunks
     function processBufferQueue() {
-         // Ensure we still should be processing
-        if (!isStreamActive || !sourceBuffer || sourceBuffer.updating || mediaSource.readyState !== 'open' || !isSourceBufferReady) {
+        if (!isStreamActive || !sourceBuffer || !isSourceBufferReady || mediaSource.readyState !== 'open') {
             return;
         }
-        while (bufferQueue.length > 0 && isSourceBufferReady && !sourceBuffer.updating && isStreamActive && mediaSource.readyState === 'open') {
-            // console.log('Processing buffer queue. Length:', bufferQueue.length);
-            const chunkToAppend = bufferQueue.shift(); // Get the oldest chunk
-            appendChunk(chunkToAppend); // Attempt to append it
-            // appendChunk sets isSourceBufferReady to false syncronously, so the loop should pause until 'updateend'
+        while (bufferQueue.length > 0 && isSourceBufferReady && !sourceBuffer.updating) {
+            const chunkToAppend = bufferQueue.shift();
+            // console.log(`Processing queue. Appending chunk size: ${chunkToAppend.byteLength}. Queue left: ${bufferQueue.length}`);
+            appendChunk(chunkToAppend);
         }
     }
 
-     // Basic buffer cleanup (remove old segments)
+     // Buffer cleanup logic
     function cleanupBuffer() {
         if (!sourceBuffer || sourceBuffer.updating || mediaSource.readyState !== 'open') {
-            return; // Don't cleanup if busy or not open
+            return;
         }
         try {
             const buffered = sourceBuffer.buffered;
             const currentTime = videoPlayer.currentTime;
-            // Only cleanup if buffer exists and we have a current time
             if (buffered.length > 0 && currentTime > 0) {
-                 // Define a threshold, e.g., keep last 30 seconds + a little buffer
-                const keepDuration = 30;
+                const keepDuration = 30; // Keep last 30 seconds
                 const removalPoint = Math.max(0, currentTime - keepDuration);
-                const bufferedStart = buffered.start(0); // Start of the entire buffered range
-
-                 // Only remove if there's a significant amount to remove
-                 if (removalPoint > bufferedStart) {
-                    console.log(`Buffer cleanup: Removing from ${bufferedStart} to ${removalPoint} (Current time: ${currentTime})`);
-                    isSourceBufferReady = false; // Mark busy for removal
-                    sourceBuffer.remove(bufferedStart, removalPoint); // remove() triggers 'updateend'
-                 } else {
-                    // console.log(`Buffer cleanup skipped: Removal point ${removalPoint} not significantly ahead of buffer start ${bufferedStart}`);
+                const bufferedStart = buffered.start(0);
+                if (removalPoint > bufferedStart + 1) { // Only remove if more than 1s difference
+                    console.log(`Buffer cleanup: Removing ${bufferedStart.toFixed(2)} to ${removalPoint.toFixed(2)} (Current: ${currentTime.toFixed(2)})`);
+                    isSourceBufferReady = false; // Mark busy
+                    sourceBuffer.remove(bufferedStart, removalPoint);
                  }
             }
         } catch (error) {
-            console.error("Error during buffer cleanup:", error.name, error.message);
-             // Don't assume ready=true here, let 'updateend' or 'error' handle state
-             isSourceBufferReady = true; // Resetting cautiously, might be better to let updateend handle it
+            console.error("Error during buffer cleanup:", error);
+             isSourceBufferReady = true; // Reset cautiously on error
         }
     }
 
@@ -257,15 +305,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Socket.IO Event Handling ---
     function connectWebSocket() {
         streamId = getStreamIdFromUrl();
-        if (!streamId) {
-            // updateStreamStatus called in getStreamIdFromUrl
-            return;
-        }
+        if (!streamId) return;
 
         addChatMessage({ type: 'system', text: 'Connecting to stream...' });
 
-        // Socket is already initialized globally with transportOptions.
-        // Ensure listeners are clean before attaching.
+        // Clean up listeners before attaching
         socket.off('connect');
         socket.off('stream_details');
         socket.off('receive_live_chunk');
@@ -280,34 +324,78 @@ document.addEventListener('DOMContentLoaded', () => {
         socket.on('connect', () => {
             console.log('Socket connected:', socket.id);
             addChatMessage({ type: 'system', text: 'Connected. Joining stream...' });
-            // Tell the server which stream we want to join
             socket.emit('join_live_room', { streamId: streamId });
-            // Reset state flags on fresh connect
-            isStreamActive = true;
-            isSourceBufferReady = false; // Will be set by MediaSource events
+            // Reset flags on *new* successful connection
+            isStreamActive = false; // Wait for stream_details to confirm live status
+            isMediaSourceOpen = false;
+            isSourceBufferReady = false;
+            receivedMimeType = null;
+            sawFirstChunk = false;
             bufferQueue = [];
+            // If MediaSource existed, it needs re-init
+            if (mediaSource) {
+                 console.log("Socket reconnected, ensuring MediaSource is re-initialized if needed.");
+                 // Let stream_details handle the re-init based on live status
+            }
         });
 
-        // Listen for confirmation or initial stream details
         socket.on('stream_details', (details) => {
              console.log("Received stream details:", details);
              streamTitleElement.textContent = details.title || 'Live Stream';
-             // Add host name if available: hostNameElement.textContent = `by ${details.hostName || 'Broadcaster'}`;
              updateStreamStatus(details.isLive !== false, details.isLive ? "LIVE" : "Stream Offline");
+
              if (details.isLive !== false) {
-                 if (!mediaSource || mediaSource.readyState === 'closed') {
-                    console.log("Initializing MediaSource for live stream.");
-                    initializeMediaSource(); // Start playback setup only if confirmed live and not already setup
+                 isStreamActive = true; // Mark stream as active
+                 // Store the received mimeType (critical step)
+                 if (details.mimeType) {
+                      console.log(`Received mimeType from server: "${details.mimeType}"`);
+                      // Basic validation - check if it's a non-empty string
+                      if (typeof details.mimeType === 'string' && details.mimeType.trim().length > 0) {
+                           receivedMimeType = details.mimeType;
+                           // Check if the browser *actually* supports this exact type
+                           if (!MediaSource.isTypeSupported(receivedMimeType)) {
+                                console.error(`Browser reports it does NOT support the received MIME type: "${receivedMimeType}"`);
+                                alert(`Playback error: Browser doesn't support the stream format (${receivedMimeType})`);
+                                updateStreamStatus(false, "Unsupported Format");
+                                isStreamActive = false;
+                                receivedMimeType = null; // Invalidate mime type
+                                return; // Stop processing this stream detail
+                           }
+                      } else {
+                           console.error("Received invalid mimeType value from server:", details.mimeType);
+                           alert("Playback error: Invalid stream format information received.");
+                           updateStreamStatus(false, "Stream Config Error");
+                           isStreamActive = false;
+                           return;
+                      }
+
                  } else {
-                     console.log("MediaSource already exists or is opening/open. State:", mediaSource.readyState);
-                      // If MediaSource exists but is open, maybe re-add buffer if needed? Risky.
-                      // Safest is usually to let existing logic handle it or require refresh on errors.
+                      console.error("Stream details received, but 'mimeType' field is missing!");
+                      alert("Playback error: Stream format information missing.");
+                      updateStreamStatus(false, "Stream Config Error");
+                      isStreamActive = false;
+                      return; // Cannot proceed without mimeType
                  }
-             } else {
-                 // Stream exists but is not live
-                 console.log("Stream details indicate stream is not currently live.");
+
+                 // Initialize MediaSource if it doesn't exist or is closed
+                 if (!mediaSource || mediaSource.readyState === 'closed') {
+                    console.log("Stream is live, initializing MediaSource.");
+                    initializeMediaSource();
+                 } else {
+                      console.log("MediaSource already exists and is opening/open.");
+                 }
+
+                 // If MediaSource is already open *and* we just got the mimeType, try adding buffer
+                 if (isMediaSourceOpen && receivedMimeType) {
+                     console.log("stream_details received, MediaSource is already open. Attempting addSourceBuffer.");
+                     addSourceBuffer();
+                 }
+
+             } else { // Stream is NOT live
+                 isStreamActive = false;
+                 receivedMimeType = null; // Clear mime type if stream not live
                  if (mediaSource && mediaSource.readyState === 'open') {
-                     console.log("Closing existing MediaSource as stream is not live.");
+                     console.log("Stream is not live, closing open MediaSource.");
                      try { mediaSource.endOfStream(); } catch (e) {}
                  }
              }
@@ -315,47 +403,51 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
         // Listen for video/audio chunks
-        socket.on('receive_live_chunk', (chunk) => { // No longer needs async
-             if (!isStreamActive) return; // Don't process if stream is known to be inactive
+        socket.on('receive_live_chunk', (chunk) => {
+             if (!isStreamActive) return; // Ignore chunks if stream isn't active
 
-             // Expecting ArrayBuffer due to transportOptions
-             if (chunk instanceof ArrayBuffer && chunk.byteLength > 0) {
-                 // console.log('Received chunk size:', chunk.byteLength);
-                 appendChunk(chunk); // Append the received ArrayBuffer
+             // Expecting ArrayBuffer
+             if (!(chunk instanceof ArrayBuffer)) {
+                  console.warn("Received chunk is not an ArrayBuffer. Type:", typeof chunk);
+                  return;
+             }
+             if (chunk.byteLength === 0) {
+                 console.log("Received empty chunk, skipping.");
+                 return;
+             }
 
-                 // Attempt to play if paused
-                 if (videoPlayer.paused && videoPlayer.readyState >= videoPlayer.HAVE_FUTURE_DATA) {
-                      const buffered = videoPlayer.buffered;
-                      let canPlay = false;
-                      if (buffered.length > 0) {
-                           const currentBufferEnd = buffered.end(buffered.length - 1);
-                           // Check if buffer extends beyond current time significantly enough
-                           if (currentBufferEnd > videoPlayer.currentTime + 0.2) {
-                               canPlay = true;
-                           }
-                      }
-
-                      if (canPlay) {
-                           // console.log("Attempting to play video...");
-                           videoPlayer.play().catch(e => {
-                               // Ignore common interruptions or already playing errors
-                               if (e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
-                                   console.warn("Autoplay attempt failed:", e.name, e.message);
-                               }
-                           });
-                      } else {
-                           // console.log("Video paused, not enough buffer ahead to play yet.");
-                      }
-                 }
-            } else if (chunk instanceof ArrayBuffer && chunk.byteLength === 0) {
-                // Ignore empty chunks
-            } else {
-                 // Log unexpected types, though should be prevented by transportOptions
-                console.warn("Received unexpected data type on 'receive_live_chunk'. Expected ArrayBuffer, got:", typeof chunk);
-                if (chunk instanceof Blob) {
-                    console.warn("-> Chunk was a Blob. Check socket transportOptions.");
+             // Log first chunk's header bytes (Instruction #2)
+             if (!sawFirstChunk) {
+                sawFirstChunk = true;
+                const header = new Uint8Array(chunk).subarray(0, 16); // Get first 16 bytes
+                const hexHeader = Array.from(header).map(b => b.toString(16).padStart(2, '0')).join(' ');
+                console.log("▶️ First 16 bytes of first chunk:", hexHeader);
+                // Check if it looks like EBML/WebM: 1a 45 df a3 ...
+                if (header[0] === 0x1a && header[1] === 0x45 && header[2] === 0xdf && header[3] === 0xa3) {
+                    console.log("  ✅ Header looks like WebM EBML.");
+                } else {
+                    console.warn("  ⚠️ First chunk header doesn't match expected WebM EBML signature!");
                 }
-            }
+             }
+
+             // Append the chunk
+             appendChunk(chunk);
+
+             // Attempt to play if paused
+             if (videoPlayer.paused && videoPlayer.readyState >= videoPlayer.HAVE_METADATA) { // Can play once metadata is known
+                 if (sourceBuffer && sourceBuffer.buffered.length > 0) {
+                     const bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+                     // Only play if there's some buffer ahead of current time
+                     if (bufferedEnd > videoPlayer.currentTime + 0.1) {
+                        // console.log("Attempting to play video...");
+                        videoPlayer.play().catch(e => {
+                            if (e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
+                                console.warn("Autoplay attempt failed:", e.name, e.message);
+                            }
+                        });
+                     }
+                 }
+             }
         });
 
         socket.on('new_live_comment', (message) => {
@@ -366,47 +458,40 @@ document.addEventListener('DOMContentLoaded', () => {
             viewerCountElement.textContent = `👀 ${count}`;
         });
 
-        // Listen for reactions broadcast by the server
         socket.on('broadcast_reaction', (data) => {
-            if (data && data.reaction) {
-                // Placeholder: Implement visual feedback for the reaction
-                // console.log(`Reaction received: ${data.reaction}`);
-                // createFlyingEmoji(data.reaction); // Example function call
-            }
+            if (data && data.reaction) { /* Placeholder */ }
         });
 
-
         socket.on('live_stream_ended', (data) => {
-            console.log("Received stream ended signal. Reason:", data?.reason || "N/A");
+            console.log("Received live_stream_ended signal. Reason:", data?.reason || "N/A");
             addChatMessage({ type: 'system', text: 'Stream has ended.' });
             updateStreamStatus(false, "Stream Ended");
             isStreamActive = false;
-            bufferQueue = []; // Clear any pending chunks
+            receivedMimeType = null; // Clear mime type
+            bufferQueue = [];
             if (mediaSource && mediaSource.readyState === 'open') {
+                console.log("Attempting to cleanly end MediaSource stream.");
                 try {
-                    // Wait for potential final buffer update before ending
                     if (sourceBuffer && !sourceBuffer.updating) {
                         mediaSource.endOfStream();
-                        console.log("MediaSource endOfStream called.");
                     } else if (sourceBuffer && sourceBuffer.updating) {
-                         console.warn("Stream ended, waiting for SourceBuffer update to finish before calling endOfStream.");
+                         console.warn("Stream ended while SourceBuffer updating, waiting briefly...");
                          const endStreamAfterUpdate = () => {
                              if (mediaSource && mediaSource.readyState === 'open') {
-                                  try { mediaSource.endOfStream(); console.log("MediaSource endOfStream called after updateend."); }
-                                  catch(e) { console.warn("Error ending MediaSource stream after update:", e); }
+                                  try { mediaSource.endOfStream(); console.log("MediaSource endOfStream called after update."); }
+                                  catch(e) { console.warn("Error ending MediaSource stream post-update:", e); }
                              }
                          };
                          sourceBuffer.addEventListener('updateend', endStreamAfterUpdate, { once: true });
-                         // Safety timeout
-                         setTimeout(() => {
+                         setTimeout(() => { // Safety net
                              sourceBuffer?.removeEventListener('updateend', endStreamAfterUpdate);
-                             endStreamAfterUpdate(); // Attempt regardless after timeout
-                         } , 500); // Shorter timeout
+                             endStreamAfterUpdate();
+                         }, 500);
                     } else {
                          mediaSource.endOfStream(); // No buffer or not updating
                     }
                 } catch (e) {
-                    console.warn("Error ending MediaSource stream:", e);
+                    console.warn("Error during MediaSource endOfStream:", e);
                 }
             }
             chatMessageInput.disabled = true;
@@ -418,6 +503,7 @@ document.addEventListener('DOMContentLoaded', () => {
             addChatMessage({ type: 'system', text: `Connection error: ${err.message}` });
             updateStreamStatus(false, "Connection Error");
             isStreamActive = false;
+            receivedMimeType = null;
         });
 
         socket.on('disconnect', (reason) => {
@@ -425,66 +511,44 @@ document.addEventListener('DOMContentLoaded', () => {
             addChatMessage({ type: 'system', text: `Disconnected: ${reason}` });
             updateStreamStatus(false, "Disconnected");
             isStreamActive = false;
+            receivedMimeType = null;
             if (mediaSource && mediaSource.readyState === 'open') {
-                 console.warn("Socket disconnected, attempting to end MediaSource stream.");
+                 console.warn("Socket disconnected, ending MediaSource stream.");
                  try {
-                      if (!sourceBuffer || !sourceBuffer.updating) {
-                          mediaSource.endOfStream();
-                      } else {
-                           console.warn("SourceBuffer was updating on disconnect, stream might not end cleanly.");
-                           // Less safe, but attempt to close anyway after a small delay
-                           setTimeout(() => {
-                               if (mediaSource.readyState === 'open') {
-                                   try { mediaSource.endOfStream(); } catch (e) {}
-                               }
-                           }, 100);
-                      }
-                 } catch(e){
-                     console.warn("Error ending MediaSource stream on disconnect:", e);
-                 }
+                      if (!sourceBuffer || !sourceBuffer.updating) mediaSource.endOfStream();
+                      else console.warn("SourceBuffer was updating on disconnect.");
+                 } catch(e){ console.warn("Error ending MediaSource on disconnect:", e); }
             }
-            // videoPlayer.src = ''; // Optionally clear video source
         });
 
-        // Initiate the connection if the socket isn't already connected or connecting
+        // Initiate connection
         if (!socket.connected && !socket.connecting) {
             console.log("Attempting socket connection...");
             socket.connect();
         } else if (socket.connected) {
-             console.log("Socket already connected, emitting join_live_room for:", streamId);
+             console.log("Socket already connected, manually emitting join_live_room for:", streamId);
              socket.emit('join_live_room', { streamId: streamId });
-             isStreamActive = true; // Assume stream might be active
-             isSourceBufferReady = false;
-             bufferQueue = [];
-             // If already connected, and MediaSource exists but is closed, re-initialize
-             if (mediaSource && mediaSource.readyState === 'closed') {
-                 console.log("Re-initializing MediaSource on already connected socket.");
-                 initializeMediaSource();
-             } else if (!mediaSource) {
-                 // If no MediaSource exists yet, wait for stream_details
-                 console.log("No MediaSource yet, waiting for stream_details.");
-             }
+             // State reset will happen in connect/stream_details listeners
         } else {
-            // Socket is connecting, wait for 'connect' event
             console.log("Socket is currently connecting...");
         }
     }
 
     // --- UI Updates & Chat ---
     function updateStreamStatus(isLive, statusText = "LIVE") {
-        if (isLive) {
+        if (isLive && isStreamActive) { // Only show live if stream is confirmed active
             liveBadge.textContent = `🔴 ${statusText}`;
-            liveBadge.style.color = 'var(--live-red)'; // Use CSS variable
+            liveBadge.style.color = 'var(--live-red)';
             chatMessageInput.disabled = false;
             sendChatButton.disabled = false;
-            // Only set isStreamActive if status is actually LIVE and confirmed
-            if (statusText === "LIVE") isStreamActive = true;
         } else {
-            liveBadge.textContent = `⚫ ${statusText}`; // Use black circle for offline/ended
-            liveBadge.style.color = '#666'; // Grey color
+            const displayStatus = isStreamActive ? statusText : (statusText === "LIVE" ? "Connecting..." : statusText);
+            liveBadge.textContent = `⚫ ${displayStatus}`;
+            liveBadge.style.color = '#666';
             chatMessageInput.disabled = true;
             sendChatButton.disabled = true;
-            isStreamActive = false; // Ensure stream is marked inactive
+            // Ensure isStreamActive reflects reality if showing offline status
+            if (!isLive) isStreamActive = false;
         }
     }
 
@@ -493,17 +557,17 @@ document.addEventListener('DOMContentLoaded', () => {
         item.classList.add('chat-message');
         if (message.type === 'system') {
             item.classList.add('system');
-            item.innerHTML = `<span>${message.text}</span>`;
+            // Basic sanitization for system messages too
+            const safeText = (message.text || '').replace(/</g, "<").replace(/>/g, ">");
+            item.innerHTML = `<span>${safeText}</span>`;
         } else {
-             // Basic sanitization to prevent HTML injection
             const safeUsername = (message.username || 'User').replace(/</g, "<").replace(/>/g, ">");
             const safeText = (message.text || '').replace(/</g, "<").replace(/>/g, ">");
-            item.innerHTML = `<strong>${safeUsername}:</strong> <span>${safeText}</span>`; // Added colon for clarity
+            item.innerHTML = `<strong>${safeUsername}:</strong> <span>${safeText}</span>`;
         }
         chatFeedList.appendChild(item);
-        // Auto-scroll only if user is near the bottom
-        const container = chatFeedList.parentElement; // Scroll the container div
-        const isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 50; // 50px tolerance
+        const container = chatFeedList.parentElement;
+        const isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 50;
         if (isScrolledToBottom) {
             container.scrollTop = container.scrollHeight;
         }
@@ -512,25 +576,15 @@ document.addEventListener('DOMContentLoaded', () => {
     function sendChatMessage() {
         const messageText = chatMessageInput.value.trim();
         if (messageText && socket && socket.connected && isStreamActive && streamId) {
-            const message = {
-                streamId: streamId,
-                text: messageText
-            };
-            socket.emit('send_live_comment', message);
-            chatMessageInput.value = ''; // Clear input
+            socket.emit('send_live_comment', { streamId, text: messageText });
+            chatMessageInput.value = '';
         }
     }
 
-    // --- Send Reactions ---
     function sendReaction(reaction) {
          if (socket && socket.connected && isStreamActive && streamId) {
              console.log("Sending reaction:", reaction);
-             socket.emit('send_live_reaction', {
-                 streamId: streamId,
-                 reaction: reaction
-             });
-             // Optional: Add visual feedback like a flying emoji on the screen
-             // createFlyingEmoji(reaction);
+             socket.emit('send_live_reaction', { streamId, reaction });
          }
     }
 
@@ -542,27 +596,13 @@ document.addEventListener('DOMContentLoaded', () => {
             sendChatMessage();
         }
     });
-
     reactionButtonsContainer.addEventListener('click', (event) => {
         const button = event.target.closest('.reaction-button');
-        if (button) {
-            const reaction = button.getAttribute('data-reaction');
-            if (reaction) {
-                sendReaction(reaction);
-            }
-        }
+        if (button) sendReaction(button.dataset.reaction);
     });
-
-    // Attempt to play video on interaction if needed
     videoPlayer.addEventListener('click', () => {
-        if (videoPlayer.paused) {
-            console.log("User clicked video, attempting play...");
-            videoPlayer.play().catch(e => console.warn("Manual play failed:", e.name, e.message));
-        }
-        if (videoPlayer.muted) {
-            console.log("User clicked video, unmuting.");
-            videoPlayer.muted = false;
-        }
+        if (videoPlayer.paused) videoPlayer.play().catch(e => console.warn("Manual play failed:", e.name));
+        if (videoPlayer.muted) videoPlayer.muted = false;
     });
 
     // --- Start Connection ---
