@@ -1,11 +1,11 @@
-// v32.0: Add fallback for missing mimeType in stream_details.
+// v33.0: Final polish - Initial status, remove debug probe, prep host name, adjust queue limit, graceful errors.
 // viewer.js - Client-side logic for the DropIn Live Viewer Page
 
 document.addEventListener('DOMContentLoaded', () => {
     // --- DOM Elements ---
     const videoPlayer = document.getElementById('live-video');
     const streamTitleElement = document.getElementById('stream-title');
-    const hostNameElement = document.getElementById('host-name'); // Assuming you add this ID
+    const hostNameElement = document.getElementById('host-name'); // Element to display host name
     const liveBadge = document.querySelector('.live-badge');
     const viewerCountElement = document.getElementById('viewer-count');
     const chatFeedList = document.getElementById('chat-feed-list');
@@ -22,9 +22,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let bufferQueue = [];
     let isSourceBufferReady = false;
     let isStreamActive = false;
-    let receivedMimeType = null; // Store the determined mimeType to use
+    let receivedMimeType = null;
     let isMediaSourceOpen = false;
     let sawFirstChunk = false;
+    const BUFFER_QUEUE_LIMIT = 20; // Adjusted queue limit (Suggestion #4)
+
+    // Set initial status immediately (Suggestion #1)
+    updateStreamStatus(false, "Connecting...");
 
     // Initialize socket with ArrayBuffer transport option
     socket = io('https://dropin-43k0.onrender.com', {
@@ -34,39 +38,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // --- Debugging & Initialization ---
+    // --- Initialization ---
 
-    function debugMimeVariants(ms) {
-        if (!ms || ms.readyState !== 'open') {
-            console.warn("debugMimeVariants called but MediaSource is not open or valid.");
-            return;
-        }
-        const variants = [
-            'video/webm;codecs=vp8,opus',
-            'video/webm; codecs=vp8,opus',
-            'video/webm;codecs="vp8,opus"',
-            'video/webm; codecs="vp8,opus"',
-            'video/webm'
-        ];
-        console.group("🎯 MIME variant support test");
-        variants.forEach(v => {
-            let sb = null;
-            try {
-                const ok = MediaSource.isTypeSupported(v);
-                console.log(`- Checking variant: "${v}" -> isTypeSupported: ${ok}`);
-                if (!ok) throw new Error("isTypeSupported returned false");
-                sb = ms.addSourceBuffer(v);
-                console.log(`  ✅ addSourceBuffer OK for → "${v}"`);
-            } catch (e) {
-                console.warn(`  ❌ addSourceBuffer FAILED for → "${v}"`, e.message || e);
-            } finally {
-                if (sb && ms.readyState === 'open') {
-                    try { ms.removeSourceBuffer(sb); } catch (removeError) { console.warn(`  ⚠️ Error removing test SourceBuffer for "${v}"`, removeError); }
-                }
-            }
-        });
-        console.groupEnd();
-    }
+    // REMOVED: debugMimeVariants function (Suggestion #2)
 
     function getStreamIdFromUrl() {
         const pathSegments = window.location.pathname.split('/').filter(Boolean);
@@ -81,8 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function initializeMediaSource() {
         if (!window.MediaSource) {
             console.error("MediaSource API not supported.");
-            updateStreamStatus(false, "Browser unsupported");
-            alert("Your browser doesn't support the MediaSource API required for this stream.");
+            updateStreamStatus(false, "Browser unsupported"); // Use status badge (Suggestion #5)
+            // alert("Your browser doesn't support the MediaSource API required for this stream."); // Replaced alert
             return;
         }
         if (mediaSource && mediaSource.readyState !== 'closed') {
@@ -110,7 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleSourceOpen() {
         console.log('MediaSource opened. ReadyState:', mediaSource.readyState);
         isMediaSourceOpen = true;
-        debugMimeVariants(mediaSource);
+        // REMOVED: Call to debugMimeVariants(mediaSource); (Suggestion #2)
         if (receivedMimeType) {
             console.log("MediaSource opened and mimeType was already determined. Attempting addSourceBuffer.");
             addSourceBuffer();
@@ -126,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         console.log(`Attempting to addSourceBuffer with determined mimeType: "${receivedMimeType}"`);
         try {
-            sourceBuffer = mediaSource.addSourceBuffer(receivedMimeType); // Use the determined type
+            sourceBuffer = mediaSource.addSourceBuffer(receivedMimeType);
             sourceBuffer.mode = 'sequence';
             console.log("✅ SourceBuffer added successfully.");
             sourceBuffer.addEventListener('updateend', () => { isSourceBufferReady = true; processBufferQueue(); });
@@ -143,7 +117,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function appendChunk(chunk) {
          if (!isStreamActive || !sourceBuffer || !isSourceBufferReady || mediaSource.readyState !== 'open') {
-              // console.warn("Skipping appendChunk: Prerequisite not met.");
               return;
          }
         if (!sourceBuffer.updating) {
@@ -158,7 +131,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } else {
             bufferQueue.push(chunk);
-             if (bufferQueue.length > 50) { console.warn("Buffer queue limit reached, dropping oldest chunk."); bufferQueue.shift(); }
+             // Adjusted queue limit check (Suggestion #4)
+             if (bufferQueue.length > BUFFER_QUEUE_LIMIT) {
+                 console.warn(`Buffer queue limit reached (${BUFFER_QUEUE_LIMIT}), dropping oldest chunk.`);
+                 bufferQueue.shift();
+             }
         }
     }
 
@@ -184,7 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function connectWebSocket() {
         streamId = getStreamIdFromUrl();
         if (!streamId) return;
-        addChatMessage({ type: 'system', text: 'Connecting to stream...' });
+        // Don't add chat message here, status is set globally
 
         socket.off('connect'); socket.off('stream_details'); socket.off('receive_live_chunk'); socket.off('new_live_comment'); socket.off('viewer_count_update'); socket.off('live_stream_ended'); socket.off('connect_error'); socket.off('disconnect'); socket.off('broadcast_reaction');
 
@@ -193,51 +170,53 @@ document.addEventListener('DOMContentLoaded', () => {
             addChatMessage({ type: 'system', text: 'Connected. Joining stream...' });
             socket.emit('join_live_room', { streamId: streamId });
             isStreamActive = false; isMediaSourceOpen = false; isSourceBufferReady = false; receivedMimeType = null; sawFirstChunk = false; bufferQueue = [];
+            // Update status again on connect, might still be waiting for details
+            updateStreamStatus(false, "Joining...");
         });
 
         socket.on('stream_details', (details) => {
              console.log("Received stream details:", details);
              streamTitleElement.textContent = details.title || 'Live Stream';
-             updateStreamStatus(details.isLive !== false, details.isLive ? "LIVE" : "Stream Offline");
 
-             if (details.isLive !== false) {
-                 isStreamActive = true;
+             // Set Host Name (Suggestion #3) - Prepare for optional 'hostName' field
+             if (hostNameElement) { // Check if the element exists
+                 hostNameElement.textContent = details.hostName ? `by ${details.hostName}` : 'by Broadcaster';
+             }
 
-                 // --- MIME Type Handling (Option 2: Fallback) ---
+             // Check live status first
+             const isServerLive = details.isLive !== false;
+             if (isServerLive) {
+                 // Determine MIME Type (Server or Fallback)
                  if (details.mimeType && typeof details.mimeType === 'string' && details.mimeType.trim().length > 0) {
                      console.log(`Using mimeType from server: "${details.mimeType}"`);
                      receivedMimeType = details.mimeType;
                  } else {
                      console.warn("stream_details did not include a valid mimeType. Falling back.");
-                     // Fallback logic: Prefer specific format if supported, else basic webm
-                     const fallbackPreferred = 'video/webm; codecs="vp8,opus"'; // Exact format often needed
+                     const fallbackPreferred = 'video/webm; codecs="vp8,opus"';
                      const fallbackBasic = 'video/webm';
-                     if (MediaSource.isTypeSupported(fallbackPreferred)) {
-                         receivedMimeType = fallbackPreferred;
-                         console.log(`Using fallback MIME type: "${fallbackPreferred}"`);
-                     } else if (MediaSource.isTypeSupported(fallbackBasic)) {
-                         receivedMimeType = fallbackBasic;
-                         console.log(`Using basic fallback MIME type: "${fallbackBasic}"`);
-                     } else {
-                          console.error("Neither server-provided nor fallback MIME types are supported by this browser!");
-                          alert("Playback error: Browser doesn't support required video formats (WebM/VP8/Opus).");
-                          updateStreamStatus(false, "Unsupported Format");
-                          isStreamActive = false;
-                          receivedMimeType = null; // Ensure it's null
-                          return; // Cannot proceed
+                     if (MediaSource.isTypeSupported(fallbackPreferred)) { receivedMimeType = fallbackPreferred; }
+                     else if (MediaSource.isTypeSupported(fallbackBasic)) { receivedMimeType = fallbackBasic; }
+                     else { receivedMimeType = null; } // No supported type found
+
+                     if(receivedMimeType) {
+                         console.log(`Using fallback MIME type: "${receivedMimeType}"`);
                      }
                  }
-                 // --- End MIME Type Handling ---
 
-                 // Check if the *determined* mimeType is actually supported (could be server provided or fallback)
-                 if (!MediaSource.isTypeSupported(receivedMimeType)) {
-                     console.error(`Browser reports it does NOT support the determined MIME type: "${receivedMimeType}"`);
-                     alert(`Playback error: Browser doesn't support the stream format (${receivedMimeType})`);
-                     updateStreamStatus(false, "Unsupported Format");
-                     isStreamActive = false;
-                     receivedMimeType = null;
-                     return;
+                 // Validate the determined MIME type
+                 if (!receivedMimeType || !MediaSource.isTypeSupported(receivedMimeType)) {
+                      const errorMsg = `Unsupported Format: ${receivedMimeType || 'None Found'}`;
+                      console.error(errorMsg);
+                      updateStreamStatus(false, "Unsupported Format"); // Use status badge (Suggestion #5)
+                      // alert(`Playback error: Browser doesn't support required video formats.`); // Replaced alert
+                      isStreamActive = false;
+                      receivedMimeType = null;
+                      return; // Stop processing
                  }
+
+                 // Passed validation, mark stream active and proceed
+                 isStreamActive = true;
+                 updateStreamStatus(true, "LIVE"); // Update status badge now
 
                  // Initialize MediaSource if needed
                  if (!mediaSource || mediaSource.readyState === 'closed') {
@@ -252,6 +231,7 @@ document.addEventListener('DOMContentLoaded', () => {
                  }
 
              } else { // Stream is NOT live
+                 updateStreamStatus(false, "Stream Offline");
                  isStreamActive = false;
                  receivedMimeType = null;
                  if (mediaSource && mediaSource.readyState === 'open') { console.log("Stream is not live, closing open MediaSource."); try { mediaSource.endOfStream(); } catch (e) {} }
@@ -261,7 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
         socket.on('receive_live_chunk', (chunk) => {
              if (!isStreamActive) return;
              if (!(chunk instanceof ArrayBuffer)) { console.warn("Received chunk is not an ArrayBuffer."); return; }
-             if (chunk.byteLength === 0) return; // Ignore empty chunks
+             if (chunk.byteLength === 0) return;
 
              if (!sawFirstChunk) {
                 sawFirstChunk = true;
@@ -310,27 +290,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- UI Updates & Chat ---
     function updateStreamStatus(isLive, statusText = "LIVE") {
-        // Display LIVE status only if isLive is true AND stream is marked active (meaning details received and format supported)
-        const showAsLive = isLive && isStreamActive;
+        const showAsLive = isLive && isStreamActive; // Derived state based on server signal AND local readiness
         if (showAsLive) {
             liveBadge.textContent = `🔴 ${statusText}`;
             liveBadge.style.color = 'var(--live-red)';
             chatMessageInput.disabled = false;
             sendChatButton.disabled = false;
         } else {
-            // Determine appropriate offline/connecting text
-            let offlineText = statusText;
-            if (statusText === "LIVE" && !isStreamActive) {
-                offlineText = "Connecting..."; // If server says live but we haven't fully setup
-            } else if (statusText === "Unsupported Format" || statusText === "Stream Config Error" || statusText === "Playback error") {
-                 offlineText = `Error: ${statusText}`;
-            }
-            liveBadge.textContent = `⚫ ${offlineText}`;
-            liveBadge.style.color = '#666';
+            let displayStatus = statusText;
+            // Refine offline/error messages
+            if (!isLive && statusText === "LIVE") displayStatus = "Joining..."; // Server says live, but we're not ready
+            else if (statusText === "Connecting..." || statusText === "Joining...") displayStatus = statusText;
+            else if (statusText === "Unsupported Format" || statusText === "Stream Config Error" || statusText === "Playback error" || statusText === "Browser unsupported" || statusText === "Connection Error" || statusText === "Invalid Link") displayStatus = `⚫ Error: ${statusText}`;
+            else displayStatus = `⚫ ${statusText}`; // Default offline state (Offline, Ended, Disconnected)
+
+            liveBadge.textContent = displayStatus;
+            liveBadge.style.color = '#666'; // Use grey for all non-live states
             chatMessageInput.disabled = true;
             sendChatButton.disabled = true;
-            // Ensure isStreamActive reflects the non-live status
-            if (!isLive) isStreamActive = false;
+            // Explicitly mark inactive if server says not live or we hit a setup error
+            if (!isLive || displayStatus.startsWith('⚫ Error:')) {
+                isStreamActive = false;
+            }
         }
     }
 
